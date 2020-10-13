@@ -169,7 +169,7 @@ def edit_paths(paths, *, editor=None):
 
     with contextlib.ExitStack() as exitStack:
         file = tempfile.NamedTemporaryFile(mode="w", prefix="edit-move-",
-                                           delete=False)
+                                           delete=False, encoding="utf8")
         exitStack.callback(lambda: os.remove(file.name))
 
         for line in instructions:
@@ -186,31 +186,63 @@ def edit_paths(paths, *, editor=None):
             raise AbortError(f"Failed to execute editor: {e.cmd}",
                              exit_code=e.returncode) from e
 
-        with open(file.name, "r") as f:
+        with open(file.name, "r", encoding="utf8") as f:
             return extract_file_paths(f.readlines())
 
 
-def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
-              show_preview=True):
+def replace_nonprintables(s):
     """
     TODO
     """
-    # TODO: Verify that all paths exist.
-    # What to do about directories?
-    # * Moving directories along with all of their contents should be okay.
-    # * Unclear what to do if directory is renamed separately from a file
-    #   within it.
-    # * Maybe check if any renamed files are within a renamed directory and
-    #   fail?
-    # * Need to preserve ownership/permissions.
+    def replacement_char(c):
+        if c in "\r\n":
+            return " "
+        elif ord(c) < ord(" "):
+            # Remove control characters.
+            return ""
+        else:
+            return c
+
+    return "".join((replacement_char(c) for c in s))
+
+
+def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
+              show_preview=True, always_sanitize_paths=False):
+    """
+    TODO
+    """
+    # Normalize paths.
+    original_paths = list(set(original_paths))
+    original_paths.sort()
+
+    # Verify that all paths exist.
+    for path in original_paths:
+        # TODO: What to do about directories?
+        # * Moving directories along with all of their contents should be okay.
+        # * Unclear what to do if directory is renamed separately from a file
+        #   within it.
+        # * Maybe check if any renamed files are within a renamed directory and
+        #   fail?
+        # * Need to preserve ownership/permissions.
+        if not os.path.exists(path):
+            raise AbortError(f"\"{path}\" not found.")
 
     if use_absolute_paths:
         original_paths = [os.path.abspath(path) for path in original_paths]
 
-    # TODO: If any of the file paths contain embedded newlines or NUL bytes,
-    # prompt to continue using sanitized names or abort.
+    sanitized_paths = [replace_nonprintables(path) for path in original_paths]
+    if not always_sanitize_paths and sanitized_paths != original_paths:
+        print("Non-printable characters found in paths.",
+              file=sys.stderr)
+        response = prompt("r: Replace non-printable characters (default)\n"
+                          "q: Quit\n"
+                          "? [r] ",
+                          ("replace", "quit"),
+                          default="replace")
+        if response == "quit":
+            raise AbortError(cancelled=True)
 
-    paths_to_edit = original_paths
+    paths_to_edit = sanitized_paths
     while True:
         assert len(paths_to_edit) == len(original_paths)
         new_paths = edit_paths(paths_to_edit, editor=editor)
@@ -220,14 +252,13 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
 
         if len(original_paths) != len(new_paths):
             print("Lines added or removed.", file=sys.stderr)
-            response = prompt("s: Start over (default)\n"
+            response = prompt("r: Restart (default)\n"
                               "q: Quit\n"
-                              "? [s] ",
-                              ("s", "quit"),
-                              default="s")
+                              "? [r] ",
+                              ("restart", "quit"),
+                              default="restart")
             if response == "quit":
                 raise AbortError(cancelled=True)
-            paths_to_edit = original_paths
             continue
 
         whitespace_characters = tuple(string.whitespace)
@@ -263,29 +294,118 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
             print("Nothing to do.", file=sys.stderr)
             raise AbortError(cancelled=True)
 
-        # TODO: Sanity-check new file paths to ensure that there are no
-        # collisions with existing files and that the new paths don't collide
-        # with each other.  On failure, prompt to edit, start over, or quit.
+        destination_paths = set()
+        for (_, new_path) in source_destination_list:
+            if new_path not in destination_paths:
+                destination_paths.add(new_path)
+            else:
+                print(f"\"{new_path}\" already used as a destination.",
+                      file=sys.stderr)
+
+        if len(destination_paths) != len(source_destination_list):
+            response = prompt("r: Restart (default)\n"
+                              "q: Quit\n"
+                              "? [r] ",
+                              ("restart", "quit"),
+                              default="restart")
+            if response == "restart":
+                continue
+            raise AbortError(cancelled=True)
 
         if show_preview:
             print("The following files will be moved/renamed:")
             for (original, new_path) in source_destination_list:
                 print(f"  \"{original}\" => \"{new_path}\"")
-            response = prompt("p: Proceed\n"
+            response = prompt("p: Proceed (default)\n"
                               "e: Edit\n"
                               "q: Quit\n"
-                              "? [p] ", ("proceed", "edit", "quit"), default="proceed")
+                              "? [p] ",
+                              ("proceed", "edit", "quit"), default="proceed")
             if response == "quit":
                 raise AbortError(cancelled=True)
             elif response == "edit":
                 paths_to_edit = new_paths
                 continue
 
-        # Apply renames.
-        for (original_path, new_path) in source_destination_list:
-            os.rename(original_path, new_path)
+        # Validate destination directories.
+        destination_dir_paths = {os.path.dirname(new_path)
+                                 for (_, new_path) in source_destination_list}
+        destination_dir_paths.discard("")
+        destination_dir_paths = sorted(destination_dir_paths, key=len)
 
-        # TODO: On failure, prompt, offering to revert changes, continue, or stop.
+        nonexistent_directories = []
+        invalid_directories = []
+        for dir_path in destination_dir_paths:
+            if not os.path.exists(dir_path):
+                nonexistent_directories.append(dir_path)
+            elif not os.path.isdir(dir_path):
+                invalid_directories.append(dir_path)
+
+        if invalid_directories:
+            print("Invalid destination directories:", file=sys.stderr)
+            for dir_path in invalid_directories:
+                print(f"  \"{dir_path}\"", file=sys.stderr)
+            response = prompt("e: Edit (default)\n"
+                              "i: Ignore\n"
+                              "q: Quit\n"
+                              "? [e] ",
+                              ("edit", "ignore", "quit"),
+                              default="edit")
+            if response == "edit":
+                paths_to_edit = new_paths
+                continue
+            elif response == "quit":
+                raise AbortError(cancelled=True)
+
+        if nonexistent_directories:
+            print("Destination directories do not exist:", file=sys.stderr)
+            for dir_path in nonexistent_directories:
+                print(f"  \"{dir_path}\"", file=sys.stderr)
+            response = prompt("c: Create directories (default)\n"
+                              "e: Edit\n"
+                              "q: Quit\n",
+                              ("create", "edit", "quit"),
+                              default="create")
+            if response == "edit":
+                paths_to_edit = new_paths
+                continue
+            elif response == "quit":
+                raise AbortError(cancelled=True)
+
+            for dir_path in nonexistent_directories:
+                os.mkdir(dir_path)
+
+        # Apply renames.
+        renamed = []
+        failures = []
+        for (original_path, new_path) in source_destination_list:
+            try:
+                os.rename(original_path, new_path)
+            except OSError as e:
+                failures.append((original_path, new_path, e))
+            else:
+                renamed.append((original_path, new_path))
+
+        if failures:
+            for (original_path, new_path, e) in failures:
+                print(f"Failed to move \"{original_path}\" to \"{new_path}\": "
+                      f"{e.strerror} (errror code: {e.errno})",
+                      file=sys.stderr)
+            response = prompt("k: Keep successful changes (default)\n"
+                              "u: Undo all changes\n"
+                              "? [k] ",
+                              ("undo", "keep"),
+                              default="keep")
+            if response == "undo":
+                undo_failed = False
+                for (original_path, new_path) in renamed:
+                    try:
+                        os.rename(new_path, original_path)
+                    except OSError as e:
+                        print(str(e))
+                        undo_failed = True
+                if undo_failed:
+                    raise AbortError("Failed to undo changes.")
         break
 
 
@@ -317,7 +437,8 @@ def main(argv):
                                       "editor=",
                                       "absolute",
                                       "preview",
-                                      "no-preview"))
+                                      "no-preview",
+                                      "sanitize"))
     except getopt.GetoptError as e:
         print(str(e), file=sys.stderr)
         usage(file=sys.stderr)
@@ -326,6 +447,7 @@ def main(argv):
     editor = None
     show_preview = True
     use_absolute_paths = False
+    always_sanitize_paths = False
 
     for (o, a) in opts:
         if o in ("-h", "--help"):
@@ -339,11 +461,14 @@ def main(argv):
             show_preview = True
         elif o == "--no-preview":
             show_preview = False
+        elif o == "--sanitize":
+            always_sanitize_paths = True
 
     edit_move(args,
               editor=editor,
               use_absolute_paths=use_absolute_paths,
-              show_preview=show_preview)
+              show_preview=show_preview,
+              always_sanitize_paths=always_sanitize_paths)
     return 0
 
 
