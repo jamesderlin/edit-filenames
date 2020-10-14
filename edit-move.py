@@ -44,6 +44,15 @@ class AbortError(Exception):
         self.exit_code = exit_code
 
 
+class RestartEdit(Exception):
+    """
+    TODO
+    """
+    def __init__(self, paths_to_edit):
+        super().__init__()
+        self.paths_to_edit = paths_to_edit
+
+
 def prompt(message, choices, default=None):
     """
     TODO
@@ -62,6 +71,9 @@ def prompt(message, choices, default=None):
         if not response[0]:
             if default:
                 return default
+            continue
+
+        if response[0] == "?":
             continue
 
         selected_choices = []
@@ -85,10 +97,9 @@ def run_editor(file_path, line_number=None, editor=None):
     The launched editor will be chosen from, in order:
 
     1. Command-line option.
-    2. Configuration file setting. (TODO)
-    3. The `VISUAL` environment variable.
-    4. The `EDITOR` environment variable.
-    5. Hard-coded paths to common editors.
+    2. The `VISUAL` environment variable.
+    3. The `EDITOR` environment variable.
+    4. Hard-coded paths to common editors.
     """
     options = []
     use_posix_style = True
@@ -121,11 +132,6 @@ def run_editor(file_path, line_number=None, editor=None):
         options.append("--")
 
     subprocess.run((editor, *options, file_path), check=True)
-
-
-def to_printable(s):
-    """Returns a printable version of the specified string."""
-    return s.replace("\n", " ").replace("\0", " ")
 
 
 def extract_file_paths(lines):
@@ -176,7 +182,7 @@ def edit_paths(paths, *, editor=None):
             print(line, file=file)
 
         for path in paths:
-            print(to_printable(path), file=file)
+            print(path, file=file)
         file.close()
 
         try:
@@ -190,10 +196,8 @@ def edit_paths(paths, *, editor=None):
             return extract_file_paths(f.readlines())
 
 
-def replace_nonprintables(s):
-    """
-    TODO
-    """
+def to_printable(s):
+    """Returns a printable version of the specified string."""
     def replacement_char(c):
         if c in "\r\n":
             return " "
@@ -206,12 +210,227 @@ def replace_nonprintables(s):
     return "".join((replacement_char(c) for c in s))
 
 
+def directory_components(path):
+    """
+    Splits a path into individual directory components.
+
+    Example:
+    directory_components("/foo/bar/baz") => ["/", "foo", "bar", "baz"]
+    """
+    components = []
+    head = path
+    while head:
+        (head, tail) = os.path.split(head)
+        if not tail:
+            # Root directory.
+            components.append(head)
+            break
+        components.append(tail)
+    components.reverse()
+    return components
+
+
+def move_file(original_path, new_path):
+    """
+    TODO
+    """
+    def undo_mkdir(path):
+        return lambda: os.rmdir(path)
+
+    undo_stack = []
+
+    components = directory_components(os.path.dirname(new_path))
+    ancestor_path = ""
+    for component in components:
+        ancestor_path = os.path.join(ancestor_path, component)
+        if not os.path.exists(ancestor_path):
+            os.mkdir(ancestor_path)
+            undo_stack.append(undo_mkdir(ancestor_path))
+
+    os.rename(original_path, new_path)
+    undo_stack.append(lambda: os.rename(new_path, original_path))
+    return undo_stack
+
+
+class EditMoveContext:
+    """
+    TODO
+    """
+    def __init__(self):
+        self.original_paths = None
+        self.previous_paths = None
+        self.new_paths = None
+        self.source_destination_list = None
+
+
+def check_whitespace(ctx):
+    """
+    TODO
+    """
+    whitespace_characters = tuple(string.whitespace)
+    has_trailing_whitespace = any((path.endswith(whitespace_characters)
+                                   for path in ctx.new_paths))
+
+    if not has_trailing_whitespace:
+        return
+
+    print("Lines with trailing whitespace detected.", file=sys.stderr)
+    response = prompt("s: Strip trailing whitespace (default)\n"
+                      "p: Preserve all whitespace\n"
+                      "e: Edit\n"
+                      "q: Quit\n"
+                      "? [s] ",
+                      ("strip", "preserve", "edit", "quit"),
+                      default="strip")
+    if response == "strip":
+        ctx.new_paths = [path.rstrip() for path in ctx.new_paths]
+    elif response == "edit":
+        raise RestartEdit(ctx.new_paths)
+    elif response == "quit":
+        raise AbortError(cancelled=True)
+    else:
+        assert response == "preserve"
+
+
+def check_collisions(ctx):
+    """
+    TODO
+    """
+    destination_paths = set()
+    for (_, new_path) in ctx.source_destination_list:
+        if new_path not in destination_paths:
+            destination_paths.add(new_path)
+        else:
+            print(f"\"{new_path}\" already used as a destination.",
+                  file=sys.stderr)
+
+    if len(destination_paths) == len(ctx.source_destination_list):
+        return
+
+    response = prompt("r: Restart (default)\n"
+                      "q: Quit\n"
+                      "? [r] ",
+                      ("restart", "quit"),
+                      default="restart")
+    if response == "restart":
+        raise RestartEdit(ctx.previous_paths)
+    else:
+        assert response == "quit"
+        raise AbortError(cancelled=True)
+
+
+def check_paths(ctx):
+    """
+    TODO
+    """
+    if not ctx.new_paths:
+        raise AbortError("Cancelling due to an empty file list.")
+
+    if len(ctx.original_paths) != len(ctx.new_paths):
+        print("Lines added or removed.", file=sys.stderr)
+        response = prompt("r: Restart (default)\n"
+                          "q: Quit\n"
+                          "? [r] ",
+                          ("restart", "quit"),
+                          default="restart")
+        if response == "quit":
+            raise AbortError(cancelled=True)
+        else:
+            assert response == "restart"
+            raise RestartEdit(ctx.previous_paths)
+
+    check_whitespace(ctx)
+
+    # Filter out unchanged paths.
+    ctx.source_destination_list = [
+        (original_path, new_path)
+        for (original_path, new_path) in zip(ctx.original_paths, ctx.new_paths)
+        if original_path != new_path
+    ]
+
+    if not ctx.source_destination_list:
+        print("Nothing to do.", file=sys.stderr)
+        raise AbortError(cancelled=True)
+
+    check_collisions(ctx)
+
+
+def preview_renames(ctx):
+    """
+    TODO
+    """
+    print("The following files will be moved/renamed:")
+    for (original, new_path) in ctx.source_destination_list:
+        print(f"  \"{original}\" => \"{new_path}\"")
+    response = prompt("p: Proceed (default)\n"
+                      "e: Edit\n"
+                      "q: Quit\n"
+                      "? [p] ",
+                      ("proceed", "edit", "quit"),
+                      default="proceed")
+    if response == "quit":
+        raise AbortError(cancelled=True)
+    elif response == "edit":
+        raise RestartEdit(ctx.new_paths)
+    else:
+        assert response == "proceed"
+
+
+def rename_files(ctx):
+    """
+    TODO
+    """
+    undo_stack = []
+    failures = []
+    for (original_path, new_path) in ctx.source_destination_list:
+        try:
+            undo_stack += move_file(original_path, new_path)
+        except OSError as e:
+            failures.append((original_path, new_path, e))
+
+    if not failures:
+        return
+
+    for (original_path, new_path, e) in failures:
+        print(f"Failed to move \"{original_path}\" to \"{new_path}\": "
+              f"{e.strerror} (error code: {e.errno})",
+              file=sys.stderr)
+
+    if not undo_stack:
+        return
+
+    response = prompt("k: Keep successful changes (default)\n"
+                      "u: Undo all changes\n"
+                      "? [k] ",
+                      ("undo", "keep"),
+                      default="keep")
+    if response == "keep":
+        return
+
+    assert response == "undo"
+    undo_failed = False
+    while undo_stack:
+        callback = undo_stack.pop()
+        try:
+            callback()
+        except OSError as e:
+            print(str(e))
+            undo_failed = True
+    if undo_failed:
+        raise AbortError("Failed to undo changes.")
+
+
 def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
               show_preview=True, always_sanitize_paths=False):
     """
     TODO
     """
     # Normalize paths.
+    if use_absolute_paths:
+        original_paths = [os.path.abspath(path) for path in original_paths]
+    else:
+        original_paths = [os.path.normpath(path) for path in original_paths]
+
     original_paths = list(set(original_paths))
     original_paths.sort()
 
@@ -227,11 +446,11 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
         if not os.path.exists(path):
             raise AbortError(f"\"{path}\" not found.")
 
-    if use_absolute_paths:
-        original_paths = [os.path.abspath(path) for path in original_paths]
+    ctx = EditMoveContext()
+    ctx.original_paths = original_paths
 
-    sanitized_paths = [replace_nonprintables(path) for path in original_paths]
-    if not always_sanitize_paths and sanitized_paths != original_paths:
+    sanitized_paths = [to_printable(path) for path in ctx.original_paths]
+    if not always_sanitize_paths and sanitized_paths != ctx.original_paths:
         print("Non-printable characters found in paths.",
               file=sys.stderr)
         response = prompt("r: Replace non-printable characters (default)\n"
@@ -241,172 +460,28 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
                           default="replace")
         if response == "quit":
             raise AbortError(cancelled=True)
+        else:
+            assert response == "replace"
 
     paths_to_edit = sanitized_paths
     while True:
-        assert len(paths_to_edit) == len(original_paths)
-        new_paths = edit_paths(paths_to_edit, editor=editor)
+        try:
+            assert len(paths_to_edit) == len(original_paths)
+            ctx.previous_paths = paths_to_edit
+            ctx.new_paths = edit_paths(paths_to_edit, editor=editor)
+            ctx.new_paths = [os.path.normpath(path) for path in ctx.new_paths]
 
-        if not new_paths:
-            raise AbortError("Cancelling due to an empty file list.")
+            check_paths(ctx)
 
-        if len(original_paths) != len(new_paths):
-            print("Lines added or removed.", file=sys.stderr)
-            response = prompt("r: Restart (default)\n"
-                              "q: Quit\n"
-                              "? [r] ",
-                              ("restart", "quit"),
-                              default="restart")
-            if response == "quit":
-                raise AbortError(cancelled=True)
+            if show_preview:
+                preview_renames(ctx)
+
+            rename_files(ctx)
+            break
+
+        except RestartEdit as e:
+            paths_to_edit = e.paths_to_edit
             continue
-
-        whitespace_characters = tuple(string.whitespace)
-        has_trailing_whitespace = any((path.endswith(whitespace_characters)
-                                       for path in new_paths))
-
-        if has_trailing_whitespace:
-            print("Lines with trailing whitespace detected.",
-                  file=sys.stderr)
-            response = prompt("s: Strip trailing whitespace (default)\n"
-                              "p: Preserve all whitespace\n"
-                              "e: Edit\n"
-                              "q: Quit\n"
-                              "? [s] ",
-                              ("strip", "preserve", "edit", "quit"),
-                              default="strip")
-            if response == "strip":
-                new_paths = [path.rstrip() for path in new_paths]
-            elif response == "edit":
-                paths_to_edit = new_paths
-                continue
-            elif response == "quit":
-                raise AbortError(cancelled=True)
-
-        # Filter out unchanged paths.
-        source_destination_list = [
-            (original_path, new_path)
-            for (original_path, new_path) in zip(original_paths, new_paths)
-            if original_path != new_path
-        ]
-
-        if not source_destination_list:
-            print("Nothing to do.", file=sys.stderr)
-            raise AbortError(cancelled=True)
-
-        destination_paths = set()
-        for (_, new_path) in source_destination_list:
-            if new_path not in destination_paths:
-                destination_paths.add(new_path)
-            else:
-                print(f"\"{new_path}\" already used as a destination.",
-                      file=sys.stderr)
-
-        if len(destination_paths) != len(source_destination_list):
-            response = prompt("r: Restart (default)\n"
-                              "q: Quit\n"
-                              "? [r] ",
-                              ("restart", "quit"),
-                              default="restart")
-            if response == "restart":
-                continue
-            raise AbortError(cancelled=True)
-
-        if show_preview:
-            print("The following files will be moved/renamed:")
-            for (original, new_path) in source_destination_list:
-                print(f"  \"{original}\" => \"{new_path}\"")
-            response = prompt("p: Proceed (default)\n"
-                              "e: Edit\n"
-                              "q: Quit\n"
-                              "? [p] ",
-                              ("proceed", "edit", "quit"), default="proceed")
-            if response == "quit":
-                raise AbortError(cancelled=True)
-            elif response == "edit":
-                paths_to_edit = new_paths
-                continue
-
-        # Validate destination directories.
-        destination_dir_paths = {os.path.dirname(new_path)
-                                 for (_, new_path) in source_destination_list}
-        destination_dir_paths.discard("")
-        destination_dir_paths = sorted(destination_dir_paths, key=len)
-
-        nonexistent_directories = []
-        invalid_directories = []
-        for dir_path in destination_dir_paths:
-            if not os.path.exists(dir_path):
-                nonexistent_directories.append(dir_path)
-            elif not os.path.isdir(dir_path):
-                invalid_directories.append(dir_path)
-
-        if invalid_directories:
-            print("Invalid destination directories:", file=sys.stderr)
-            for dir_path in invalid_directories:
-                print(f"  \"{dir_path}\"", file=sys.stderr)
-            response = prompt("e: Edit (default)\n"
-                              "i: Ignore\n"
-                              "q: Quit\n"
-                              "? [e] ",
-                              ("edit", "ignore", "quit"),
-                              default="edit")
-            if response == "edit":
-                paths_to_edit = new_paths
-                continue
-            elif response == "quit":
-                raise AbortError(cancelled=True)
-
-        if nonexistent_directories:
-            print("Destination directories do not exist:", file=sys.stderr)
-            for dir_path in nonexistent_directories:
-                print(f"  \"{dir_path}\"", file=sys.stderr)
-            response = prompt("c: Create directories (default)\n"
-                              "e: Edit\n"
-                              "q: Quit\n",
-                              ("create", "edit", "quit"),
-                              default="create")
-            if response == "edit":
-                paths_to_edit = new_paths
-                continue
-            elif response == "quit":
-                raise AbortError(cancelled=True)
-
-            for dir_path in nonexistent_directories:
-                os.mkdir(dir_path)
-
-        # Apply renames.
-        renamed = []
-        failures = []
-        for (original_path, new_path) in source_destination_list:
-            try:
-                os.rename(original_path, new_path)
-            except OSError as e:
-                failures.append((original_path, new_path, e))
-            else:
-                renamed.append((original_path, new_path))
-
-        if failures:
-            for (original_path, new_path, e) in failures:
-                print(f"Failed to move \"{original_path}\" to \"{new_path}\": "
-                      f"{e.strerror} (errror code: {e.errno})",
-                      file=sys.stderr)
-            response = prompt("k: Keep successful changes (default)\n"
-                              "u: Undo all changes\n"
-                              "? [k] ",
-                              ("undo", "keep"),
-                              default="keep")
-            if response == "undo":
-                undo_failed = False
-                for (original_path, new_path) in renamed:
-                    try:
-                        os.rename(new_path, original_path)
-                    except OSError as e:
-                        print(str(e))
-                        undo_failed = True
-                if undo_failed:
-                    raise AbortError("Failed to undo changes.")
-        break
 
 
 def usage(full=False, file=sys.stdout):
@@ -421,15 +496,6 @@ def usage(full=False, file=sys.stdout):
 
 
 def main(argv):
-    # Command-line options:
-    # -e/--editor=EDITOR
-    # --absolute Use absolute paths.
-    # --no-preview
-
-    # Does not support file paths that contain embedded newlines.
-    # Does not support file paths that contain emedded NUL bytes.
-    # Leading and trailing whitespace is removed from renamed files.
-
     try:
         (opts, args) = getopt.getopt(argv[1:],
                                      "he:",
