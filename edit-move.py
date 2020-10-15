@@ -19,10 +19,13 @@
 """TODO"""
 
 import contextlib
+import errno
 import getopt
 import os
+import pathlib
 import readline  # pylint: disable=unused-import  # noqa: F401  # Imported for side-effect.
 import shlex
+import shutil
 import string
 import subprocess
 import sys
@@ -210,26 +213,6 @@ def to_printable(s):
     return "".join((replacement_char(c) for c in s))
 
 
-def directory_components(path):
-    """
-    Splits a path into individual directory components.
-
-    Example:
-    directory_components("/foo/bar/baz") => ["/", "foo", "bar", "baz"]
-    """
-    components = []
-    head = path
-    while head:
-        (head, tail) = os.path.split(head)
-        if not tail:
-            # Root directory.
-            components.append(head)
-            break
-        components.append(tail)
-    components.reverse()
-    return components
-
-
 def move_file(original_path, new_path):
     """
     TODO
@@ -239,15 +222,18 @@ def move_file(original_path, new_path):
 
     undo_stack = []
 
-    components = directory_components(os.path.dirname(new_path))
-    ancestor_path = ""
-    for component in components:
-        ancestor_path = os.path.join(ancestor_path, component)
-        if not os.path.exists(ancestor_path):
+    parts = new_path.parent.parts
+    ancestor_path = pathlib.Path()
+    for part in parts:
+        ancestor_path /= part
+        if not ancestor_path.exists():
             os.mkdir(ancestor_path)
             undo_stack.append(undo_mkdir(ancestor_path))
 
-    os.rename(original_path, new_path)
+    if os.path.lexists(new_path):
+        raise OSError(errno.EEXIST, f"\"{new_path}\" already exists.", new_path)
+    shutil.move(original_path, new_path)
+    print(f"Moved: \"{original_path}\" => \"{new_path}\"")
     undo_stack.append(lambda: os.rename(new_path, original_path))
     return undo_stack
 
@@ -343,7 +329,7 @@ def check_paths(ctx):
 
     # Filter out unchanged paths.
     ctx.source_destination_list = [
-        (original_path, new_path)
+        (pathlib.Path(original_path), pathlib.Path(new_path))
         for (original_path, new_path) in zip(ctx.original_paths, ctx.new_paths)
         if original_path != new_path
     ]
@@ -359,7 +345,7 @@ def preview_renames(ctx):
     """
     TODO
     """
-    print("The following files will be moved/renamed:")
+    print("The following files will be moved:")
     for (original, new_path) in ctx.source_destination_list:
         print(f"  \"{original}\" => \"{new_path}\"")
     response = prompt("p: Proceed (default)\n"
@@ -386,14 +372,16 @@ def rename_files(ctx):
         try:
             undo_stack += move_file(original_path, new_path)
         except OSError as e:
-            failures.append((original_path, new_path, e))
+            failures.append((original_path, new_path,
+                             f"{e.strerror} (error code: {e.errno})"))
+        except Exception as e:  # pylint: disable=broad-except
+            failures.append((original_path, new_path, str(e)))
 
     if not failures:
         return
 
-    for (original_path, new_path, e) in failures:
-        print(f"Failed to move \"{original_path}\" to \"{new_path}\": "
-              f"{e.strerror} (error code: {e.errno})",
+    for (original_path, new_path, reason) in failures:
+        print(f"Failed to move \"{original_path}\" to \"{new_path}\": {reason}",
               file=sys.stderr)
 
     if not undo_stack:
@@ -435,6 +423,7 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
     original_paths.sort()
 
     # Verify that all paths exist.
+    directories_to_move = []
     for path in original_paths:
         # TODO: What to do about directories?
         # * Moving directories along with all of their contents should be okay.
@@ -443,7 +432,22 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
         # * Maybe check if any renamed files are within a renamed directory and
         #   fail?
         # * Need to preserve ownership/permissions.
-        if not os.path.exists(path):
+        path = pathlib.Path(os.path.abspath(path))
+
+        ancestor_path = path
+        while True:
+            next_parent = ancestor_path.parent
+            if next_parent == ancestor_path:
+                break
+            ancestor_path = next_parent
+
+            if ancestor_path in directories_to_move:
+                raise AbortError(f"\"{path}\" and \"{ancestor_path}\" cannot "
+                                 f"be moved together.")
+
+        if path.is_dir():
+            directories_to_move.append(path)
+        elif not os.path.lexists(path):
             raise AbortError(f"\"{path}\" not found.")
 
     ctx = EditMoveContext()
@@ -492,7 +496,7 @@ def usage(full=False, file=sys.stdout):
           file=file, end="")
     if full:
         # TODO
-        pass
+        raise NotImplementedError()
 
 
 def main(argv):
