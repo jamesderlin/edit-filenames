@@ -16,7 +16,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-"""TODO"""
+"""
+Renames or moves files using a text editor.
+
+Allows paths to a large number of files to be edited using features of a text
+editor, such as search and replace or multi-cursor editing.
+"""
 
 import contextlib
 import errno
@@ -49,7 +54,8 @@ class AbortError(Exception):
 
 class RestartEdit(Exception):
     """
-    TODO
+    An exception that represents a request to restart the editor.  The editor's
+    contents will be initialized to the specified paths.
     """
     def __init__(self, paths_to_edit):
         super().__init__()
@@ -58,9 +64,14 @@ class RestartEdit(Exception):
 
 def prompt(message, choices, default=None):
     """
-    TODO
+    Prompts the user to choose from a list of choices.
+
+    Returns the selected choice.
+
+    Raises an `AbortError` if the user cancels the prompt by sending EOF.
     """
     assert choices
+    assert not default or default in choices
     choices = [(choice.strip().lower(), choice) for choice in choices]
 
     while True:
@@ -99,10 +110,12 @@ def run_editor(file_path, line_number=None, editor=None):
 
     The launched editor will be chosen from, in order:
 
-    1. Command-line option.
+    1. The explicitly specified editor.
     2. The `VISUAL` environment variable.
     3. The `EDITOR` environment variable.
     4. Hard-coded paths to common editors.
+
+    Raises an `AbortError` if an editor cannot be determined.
     """
     options = []
     use_posix_style = True
@@ -116,7 +129,11 @@ def run_editor(file_path, line_number=None, editor=None):
 
     if not editor:
         if os.name == "posix":
-            editor = "vi"
+            default_editor = "/usr/bin/editor"
+            if pathlib.Path(default_editor).exists():
+                editor = default_editor
+            else:
+                editor = "vi"
         elif os.name == "nt":
             editor = "notepad.exe"
             line_number = None
@@ -138,9 +155,7 @@ def run_editor(file_path, line_number=None, editor=None):
 
 
 def extract_file_paths(lines):
-    """
-    TODO
-    """
+    """Parses and returns the list of file paths from the edited file."""
     # Ignore trailing blank lines.
     for last_line in reversed(range(len(lines))):
         if lines[last_line].strip():
@@ -161,7 +176,12 @@ def extract_file_paths(lines):
 
 def edit_paths(paths, *, editor=None):
     """
-    TODO
+    Opens the list of paths in the editor.
+
+    If no editor is specified, one will be determined automatically. (See
+    `run_editor`.)
+
+    Raises an `AbortError` if we fail to execute the editor.
     """
     horizontal_rule = "*" * 70
     instructions = [
@@ -177,7 +197,7 @@ def edit_paths(paths, *, editor=None):
     ]
 
     with contextlib.ExitStack() as exitStack:
-        file = tempfile.NamedTemporaryFile(mode="w", prefix="edit-move-",
+        file = tempfile.NamedTemporaryFile(mode="w", prefix=f"{__name__}-",
                                            delete=False, encoding="utf8")
         exitStack.callback(lambda: os.remove(file.name))
 
@@ -199,8 +219,13 @@ def edit_paths(paths, *, editor=None):
             return extract_file_paths(f.readlines())
 
 
-def to_printable(s):
-    """Returns a printable version of the specified string."""
+def sanitized_path(s):
+    """
+    Returns a sanitized version of the specified file path.
+
+    Carriage return and linefeed characters will be replaced with a single
+    space, and all other control characters will be removed.
+    """
     def replacement_char(c):
         if c in "\r\n":
             return " "
@@ -215,7 +240,9 @@ def to_printable(s):
 
 def move_file(original_path, new_path):
     """
-    TODO
+    Moves the specified file from `original_path` to `new_path`.
+
+    Raises an `OSError` on failure.
     """
     def undo_mkdir(path):
         return lambda: os.rmdir(path)
@@ -233,15 +260,16 @@ def move_file(original_path, new_path):
     if os.path.lexists(new_path):
         raise OSError(errno.EEXIST, f"\"{new_path}\" already exists.", new_path)
     shutil.move(original_path, new_path)
-    print(f"Moved: \"{original_path}\" => \"{new_path}\"")
+    operation = ("Renamed"
+                 if original_path.parent == new_path.parent
+                 else "Moved")
+    print(f"{operation}: \"{original_path}\" => \"{new_path}\"")
     undo_stack.append(lambda: os.rename(new_path, original_path))
     return undo_stack
 
 
 class EditMoveContext:
-    """
-    TODO
-    """
+    """Context for `edit_move` and its helper functions."""
     def __init__(self):
         self.original_paths = None
         self.previous_paths = None
@@ -251,7 +279,11 @@ class EditMoveContext:
 
 def check_whitespace(ctx):
     """
-    TODO
+    Helper function to `check_paths` that checks the list of edited paths for
+    trailing whitespace, prompting the user to take action if necessary.
+
+    Raises `RestartEdit` if the user chooses to re-edit the paths.  Raises an
+    `AbortError` if the user chooses to quit.
     """
     whitespace_characters = tuple(string.whitespace)
     has_trailing_whitespace = any((path.endswith(whitespace_characters)
@@ -280,34 +312,59 @@ def check_whitespace(ctx):
 
 def check_collisions(ctx):
     """
-    TODO
+    Helper function to `check_paths` that sanity-checks for destination file
+    path collisions, prompting the user to take action if necessary.
+
+    Raises `RestartEdit` if the user chooses to re-edit the paths.  Raises an
+    `AbortError` if the user chooses to quit.
     """
+    found_collision = False
     destination_paths = set()
     for (_, new_path) in ctx.source_destination_list:
         if new_path not in destination_paths:
             destination_paths.add(new_path)
         else:
+            found_collision = True
             print(f"\"{new_path}\" already used as a destination.",
                   file=sys.stderr)
 
-    if len(destination_paths) == len(ctx.source_destination_list):
-        return
+    if found_collision:
+        response = prompt("r: Restart (default)\n"
+                          "q: Quit\n"
+                          "? [r] ",
+                          ("restart", "quit"),
+                          default="restart")
+        if response == "restart":
+            raise RestartEdit(ctx.previous_paths)
+        else:
+            assert response == "quit"
+            raise AbortError(cancelled=True)
 
-    response = prompt("r: Restart (default)\n"
-                      "q: Quit\n"
-                      "? [r] ",
-                      ("restart", "quit"),
-                      default="restart")
-    if response == "restart":
-        raise RestartEdit(ctx.previous_paths)
-    else:
-        assert response == "quit"
-        raise AbortError(cancelled=True)
+    for (_, new_path) in ctx.source_destination_list:
+        if os.path.lexists(new_path):
+            found_collision = True
+            print(f"\"{new_path}\" already exists.")
+
+    if found_collision:
+        response = prompt("e: Edit (default)\n"
+                          "q: Quit\n"
+                          "? [e] ",
+                          ("edit", "quit"),
+                          default="edit")
+        if response == "edit":
+            raise RestartEdit(ctx.new_paths)
+        else:
+            assert response == "quit"
+            raise AbortError(cancelled=True)
 
 
 def check_paths(ctx):
     """
-    TODO
+    Runs various sanity-checks on the edited file paths, prompting the user to
+    take action if necessary.
+
+    Raises `RestartEdit` if the user chooses to re-edit the paths.  Raises an
+    `AbortError` if the user chooses to quit.
     """
     if not ctx.new_paths:
         raise AbortError("Cancelling due to an empty file list.")
@@ -343,9 +400,13 @@ def check_paths(ctx):
 
 def preview_renames(ctx):
     """
-    TODO
+    Prints a preview of the actions that will be performed and prompts the user
+    for confirmation.
+
+    Raises `RestartEdit` if the user chooses to re-edit the paths.  Raises an
+    `AbortError` if the user chooses to quit.
     """
-    print("The following files will be moved:")
+    print("The following files will be moved or renamed:")
     for (original, new_path) in ctx.source_destination_list:
         print(f"  \"{original}\" => \"{new_path}\"")
     response = prompt("p: Proceed (default)\n"
@@ -362,9 +423,10 @@ def preview_renames(ctx):
         assert response == "proceed"
 
 
-def rename_files(ctx):
+def apply_moves(ctx):
     """
-    TODO
+    Applies the move operations, prompting the user to take action if there are
+    any failures.
     """
     undo_stack = []
     failures = []
@@ -409,9 +471,21 @@ def rename_files(ctx):
 
 
 def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
-              show_preview=True, always_sanitize_paths=False):
+              show_preview=True):
     """
-    TODO
+    Opens the specified paths in an editor, sanity-checks the move operations,
+    and applies the moves.
+
+    If no editor is specified, one will be determined automatically. (See
+    `run_editor`.)
+
+    If `use_absolute_paths` is `True`, the file paths will be opened in the
+    editor using absolute paths.
+
+    If `show_preview` is `True`, prompts the user for confirmation before
+    applying the moves.
+
+    Raises an `AbortError` on failure or if the user chooses to quit.
     """
     # Normalize paths.
     if use_absolute_paths:
@@ -453,8 +527,8 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
     ctx = EditMoveContext()
     ctx.original_paths = original_paths
 
-    sanitized_paths = [to_printable(path) for path in ctx.original_paths]
-    if not always_sanitize_paths and sanitized_paths != ctx.original_paths:
+    sanitized_paths = [sanitized_path(path) for path in ctx.original_paths]
+    if sanitized_paths != ctx.original_paths:
         print("Non-printable characters found in paths.",
               file=sys.stderr)
         response = prompt("r: Replace non-printable characters (default)\n"
@@ -480,7 +554,7 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
             if show_preview:
                 preview_renames(ctx)
 
-            rename_files(ctx)
+            apply_moves(ctx)
             break
 
         except RestartEdit as e:
@@ -489,14 +563,30 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
 
 
 def usage(full=False, file=sys.stdout):
-    """
-    TODO
-    """
-    print(f"Usage: {__name__} [OPTIONS] FILE [FILE ...]\n",
-          file=file, end="")
+    """Prints usage information."""
+    print(f"Usage: {__name__} [OPTIONS] FILE [FILE ...]\n"
+          f"       {__name__} --help\n",
+          file=file,
+          end="")
     if full:
-        # TODO
-        raise NotImplementedError()
+        print(f"\n"
+              f"{__doc__.strip()}\n"
+              f"\n"
+              f"Options:\n"
+              f"    -e EDITOR, --editor=EDITOR\n"
+              f"        The path to the editor to use, along with any desired command-line\n"
+              f"        options.  If not specified, the editor will be automatically chosen\n"
+              f"        from the `EDITOR` or `VISUAL` environment variables.\n"
+              f"\n"
+              f"    --absolute\n"
+              f"        Use absolute file paths.\n"
+              f"\n"
+              f"    --no-preview\n"
+              f"        Disables showing a preview and asking for confirmation before\n"
+              f"        performing any rename or move operations.\n"
+              f"\n",
+              file=file,
+              end="")
 
 
 def main(argv):
@@ -507,8 +597,7 @@ def main(argv):
                                       "editor=",
                                       "absolute",
                                       "preview",
-                                      "no-preview",
-                                      "sanitize"))
+                                      "no-preview"))
     except getopt.GetoptError as e:
         print(str(e), file=sys.stderr)
         usage(file=sys.stderr)
@@ -517,7 +606,6 @@ def main(argv):
     editor = None
     show_preview = True
     use_absolute_paths = False
-    always_sanitize_paths = False
 
     for (o, a) in opts:
         if o in ("-h", "--help"):
@@ -531,14 +619,11 @@ def main(argv):
             show_preview = True
         elif o == "--no-preview":
             show_preview = False
-        elif o == "--sanitize":
-            always_sanitize_paths = True
 
     edit_move(args,
               editor=editor,
               use_absolute_paths=use_absolute_paths,
-              show_preview=show_preview,
-              always_sanitize_paths=always_sanitize_paths)
+              show_preview=show_preview)
     return 0
 
 
