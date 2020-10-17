@@ -36,6 +36,7 @@ import string
 import subprocess
 import sys
 import tempfile
+import typing
 
 
 class AbortError(Exception):
@@ -44,7 +45,8 @@ class AbortError(Exception):
 
     If `cancelled` is True, no error message should be printed.
     """
-    def __init__(self, message=None, cancelled=False, exit_code=1):
+    def __init__(self, message: typing.Optional[str] = None,
+                 cancelled: bool = False, exit_code: int = 1) -> None:
         super().__init__(message or ("Cancelled."
                                      if cancelled
                                      else "Unknown error"))
@@ -58,12 +60,13 @@ class RestartEdit(Exception):
     An exception that represents a request to restart the editor.  The editor's
     contents will be initialized to the specified paths.
     """
-    def __init__(self, paths_to_edit):
+    def __init__(self, paths_to_edit: typing.List[str]) -> None:
         super().__init__()
         self.paths_to_edit = paths_to_edit
 
 
-def prompt(message, choices, default=None):
+def prompt(message: str, choices: typing.Iterable[str],
+           default: typing.Optional[str] = None) -> str:
     """
     Prompts the user to choose from a list of choices.
 
@@ -73,12 +76,15 @@ def prompt(message, choices, default=None):
     """
     assert choices
     assert not default or default in choices
-    choices = [(choice.strip().lower(), choice) for choice in choices]
+    normalized_choices = [(choice.strip().lower(), choice)
+                          for choice in choices]
+    del choices
 
     while True:
         try:
-            response = input(message)
-            response = (response.strip().lower(), response)
+            raw_response = input(message)
+            response = (raw_response.strip().lower(), raw_response)
+            del raw_response
         except EOFError:
             print()
             raise AbortError(cancelled=True) from None
@@ -91,8 +97,8 @@ def prompt(message, choices, default=None):
         if response[0] == "?":
             continue
 
-        selected_choices = []
-        for choice in choices:
+        selected_choices = []  # type: typing.List[typing.Tuple[str, str]]
+        for choice in normalized_choices:
             if choice[0].startswith(response[0]):
                 selected_choices.append(choice)
 
@@ -104,7 +110,8 @@ def prompt(message, choices, default=None):
             print(f"Ambiguous choice: {response[1]}", file=sys.stderr)
 
 
-def run_editor(file_path, line_number=None, editor=None):
+def run_editor(file_path: str, line_number: typing.Optional[int] = None,
+               editor: typing.Optional[str] = None) -> None:
     """
     Open the specified file in an editor at the specified line number, if
     provided.
@@ -118,12 +125,11 @@ def run_editor(file_path, line_number=None, editor=None):
 
     Raises an `AbortError` if an editor cannot be determined.
     """
-    options = []
+    options = []  # type: typing.List[str]
     use_posix_style = True
 
     if not editor:
-        editor = (os.environ.get("VISUAL")
-                  or os.environ.get("EDITOR"))
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
 
     if editor:
         (editor, *options) = shlex.split(editor, posix=(os.name == 'posix'))
@@ -155,7 +161,7 @@ def run_editor(file_path, line_number=None, editor=None):
     subprocess.run((editor, *options, file_path), check=True)
 
 
-def extract_file_paths(lines):
+def extract_file_paths(lines: typing.List[str]) -> typing.List[str]:
     """Parses and returns the list of file paths from the edited file."""
     # Ignore trailing blank lines.
     for last_line in reversed(range(len(lines))):
@@ -175,9 +181,10 @@ def extract_file_paths(lines):
     return [lines[i].rstrip("\n") for i in range(first_line, last_line + 1)]
 
 
-def edit_paths(paths, *, editor=None):
+def edit_paths(paths: typing.Iterable[str], *,
+               editor: typing.Optional[str] = None) -> typing.List[str]:
     """
-    Opens the list of paths in the editor.
+    Opens the list of paths in the editor and returns the edited paths.
 
     If no editor is specified, one will be determined automatically. (See
     `run_editor`.)
@@ -217,17 +224,19 @@ def edit_paths(paths, *, editor=None):
                              exit_code=e.returncode) from e
 
         with open(file.name, "r", encoding="utf8") as f:
-            return extract_file_paths(f.readlines())
+            edited_paths = extract_file_paths(f.readlines())
+
+    return edited_paths
 
 
-def sanitized_path(s):
+def sanitized_path(s: str) -> str:
     """
     Returns a sanitized version of the specified file path.
 
     Carriage return and linefeed characters will be replaced with a single
     space, and all other control characters will be removed.
     """
-    def replacement_char(c):
+    def replacement_char(c: str) -> str:
         if c in "\r\n":
             return " "
         elif ord(c) < ord(" "):
@@ -239,16 +248,17 @@ def sanitized_path(s):
     return "".join((replacement_char(c) for c in s))
 
 
-def move_file(original_path, new_path):
+def move_file(original_path: pathlib.Path, new_path: pathlib.Path) \
+        -> typing.List[typing.Callable[[], typing.Any]]:
     """
     Moves the specified file from `original_path` to `new_path`.
 
     Raises an `OSError` on failure.
     """
-    def undo_mkdir(path):
+    def undo_mkdir(path: pathlib.Path) -> typing.Callable[[], None]:
         return lambda: os.rmdir(path)
 
-    undo_stack = []
+    undo_stack = []  # type: typing.List[typing.Callable[[], typing.Any]]
 
     parts = new_path.parent.parts
     ancestor_path = pathlib.Path()
@@ -260,7 +270,7 @@ def move_file(original_path, new_path):
 
     if os.path.lexists(new_path):
         raise OSError(errno.EEXIST, f"\"{new_path}\" already exists.", new_path)
-    shutil.move(original_path, new_path)
+    shutil.move(str(original_path), str(new_path))
     operation = ("Renamed"
                  if original_path.parent == new_path.parent
                  else "Moved")
@@ -271,14 +281,20 @@ def move_file(original_path, new_path):
 
 class EditMoveContext:
     """Context for `edit_move` and its helper functions."""
-    def __init__(self):
-        self.original_paths = None
-        self.previous_paths = None
-        self.new_paths = None
-        self.source_destination_list = None
+    original_paths: typing.List[str]
+    previous_paths: typing.List[str]
+    new_paths: typing.List[str]
+    source_destination_list: \
+        typing.List[typing.Tuple[pathlib.Path, pathlib.Path]]
+
+    def __init__(self, original_paths: typing.List[str]) -> None:
+        self.original_paths = original_paths
+        self.previous_paths = original_paths
+        self.new_paths = []
+        self.source_destination_list = []
 
 
-def check_whitespace(ctx):
+def check_whitespace(ctx: EditMoveContext) -> None:
     """
     Helper function to `check_paths` that checks the list of edited paths for
     trailing whitespace, prompting the user to take action if necessary.
@@ -311,7 +327,7 @@ def check_whitespace(ctx):
         assert response == "preserve"
 
 
-def check_collisions(ctx):
+def check_collisions(ctx: EditMoveContext) -> None:
     """
     Helper function to `check_paths` that sanity-checks for destination file
     path collisions, prompting the user to take action if necessary.
@@ -320,7 +336,7 @@ def check_collisions(ctx):
     `AbortError` if the user chooses to quit.
     """
     found_collision = False
-    destination_paths = set()
+    destination_paths = set()  # type: typing.Set[pathlib.Path]
     for (_, new_path) in ctx.source_destination_list:
         if new_path not in destination_paths:
             destination_paths.add(new_path)
@@ -359,7 +375,7 @@ def check_collisions(ctx):
             raise AbortError(cancelled=True)
 
 
-def check_paths(ctx):
+def check_paths(ctx: EditMoveContext) -> None:
     """
     Runs various sanity-checks on the edited file paths, prompting the user to
     take action if necessary.
@@ -399,7 +415,7 @@ def check_paths(ctx):
     check_collisions(ctx)
 
 
-def preview_renames(ctx):
+def preview_renames(ctx: EditMoveContext) -> None:
     """
     Prints a preview of the actions that will be performed and prompts the user
     for confirmation.
@@ -424,13 +440,13 @@ def preview_renames(ctx):
         assert response == "proceed"
 
 
-def apply_moves(ctx):
+def apply_moves(ctx: EditMoveContext) -> None:
     """
     Applies the move operations, prompting the user to take action if there are
     any failures.
     """
-    undo_stack = []
-    failures = []
+    undo_stack = []  # type: typing.List[typing.Callable[[], typing.Any]]
+    failures = []  # type: typing.List[typing.Tuple[pathlib.Path, pathlib.Path, str]]
     for (original_path, new_path) in ctx.source_destination_list:
         try:
             undo_stack += move_file(original_path, new_path)
@@ -472,7 +488,7 @@ def apply_moves(ctx):
 
 
 def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
-              show_preview=True):
+              show_preview=True) -> None:
     """
     Opens the specified paths in an editor, sanity-checks the move operations,
     and applies the moves.
@@ -498,7 +514,7 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
     original_paths.sort()
 
     # Verify that all paths exist.
-    directories_to_move = []
+    directories_to_move = []  # type: typing.List[pathlib.Path]
     for path in original_paths:
         # TODO: What to do about directories?
         # * Moving directories along with all of their contents should be okay.
@@ -525,8 +541,7 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
         elif not os.path.lexists(path):
             raise AbortError(f"\"{path}\" not found.")
 
-    ctx = EditMoveContext()
-    ctx.original_paths = original_paths
+    ctx = EditMoveContext(original_paths)
 
     sanitized_paths = [sanitized_path(path) for path in ctx.original_paths]
     if sanitized_paths != ctx.original_paths:
@@ -563,7 +578,7 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
             continue
 
 
-def usage(full=False, file=sys.stdout):
+def usage(full: bool = False, file: typing.TextIO = sys.stdout) -> None:
     """Prints usage information."""
     print(f"Usage: {__name__} [OPTIONS] FILE [FILE ...]\n"
           f"       {__name__} --help\n",
@@ -590,21 +605,21 @@ def usage(full=False, file=sys.stdout):
               end="")
 
 
-def main(argv):
+def main(argv: typing.List[str]) -> int:
     try:
         (opts, args) = getopt.getopt(argv[1:],
                                      "he:",
-                                     ("help",
+                                     ["help",
                                       "editor=",
                                       "absolute",
                                       "preview",
-                                      "no-preview"))
+                                      "no-preview"])
     except getopt.GetoptError as e:
         print(str(e), file=sys.stderr)
         usage(file=sys.stderr)
         return 1
 
-    editor = None
+    editor = None  # type: typing.Optional[str]
     show_preview = True
     use_absolute_paths = False
 
@@ -621,7 +636,7 @@ def main(argv):
         elif o == "--no-preview":
             show_preview = False
 
-    edit_move(args,
+    edit_move([pathlib.Path(arg) for arg in args],
               editor=editor,
               use_absolute_paths=use_absolute_paths,
               show_preview=show_preview)
