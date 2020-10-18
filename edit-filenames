@@ -21,7 +21,7 @@
 Renames or moves files using a text editor.
 
 Allows paths to a large number of files to be edited using features of a text
-editor, such as search and replace or multi-cursor editing.
+editor, such as search-and-replace or multi-cursor editing.
 """
 
 import contextlib
@@ -590,7 +590,7 @@ def usage(full: bool = False, file: typing.TextIO = sys.stdout) -> None:
               f"    -e EDITOR, --editor=EDITOR\n"
               f"        The path to the editor to use, along with any desired command-line\n"
               f"        options.  If not specified, the editor will be automatically chosen\n"
-              f"        from the `EDITOR` or `VISUAL` environment variables.\n"
+              f"        from the `VISUAL` or `EDITOR` environment variables.\n"
               f"\n"
               f"    --absolute\n"
               f"        Use absolute file paths.\n"
