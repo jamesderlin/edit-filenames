@@ -24,6 +24,7 @@ Allows paths to a large number of files to be edited using features of a text
 editor, such as search-and-replace or multi-cursor editing.
 """
 
+import collections
 import contextlib
 import errno
 import getopt
@@ -246,10 +247,10 @@ def sanitized_path(s: str) -> str:
     return "".join((replacement_char(c) for c in s))
 
 
-def move_file(original_path: pathlib.Path, new_path: pathlib.Path) \
+def move_file(source_path: pathlib.Path, destination_path: pathlib.Path) \
         -> typing.List[typing.Callable[[], typing.Any]]:
     """
-    Moves the specified file from `original_path` to `new_path`.
+    Moves the specified file from `source_path` to `destination_path`.
 
     Raises an `OSError` on failure.
     """
@@ -258,7 +259,7 @@ def move_file(original_path: pathlib.Path, new_path: pathlib.Path) \
 
     undo_stack = []  # type: typing.List[typing.Callable[[], typing.Any]]
 
-    parts = new_path.parent.parts
+    parts = destination_path.parent.parts
     ancestor_path = pathlib.Path()
     for part in parts:
         ancestor_path /= part
@@ -266,14 +267,15 @@ def move_file(original_path: pathlib.Path, new_path: pathlib.Path) \
             os.mkdir(ancestor_path)
             undo_stack.append(undo_mkdir(ancestor_path))
 
-    if os.path.lexists(new_path):
-        raise OSError(errno.EEXIST, f"\"{new_path}\" already exists.", new_path)
-    shutil.move(str(original_path), str(new_path))
+    if os.path.lexists(destination_path):
+        raise OSError(errno.EEXIST, f"\"{destination_path}\" already exists.",
+                      destination_path)
+    shutil.move(str(source_path), str(destination_path))
     operation = ("Renamed"
-                 if original_path.parent == new_path.parent
+                 if source_path.parent == destination_path.parent
                  else "Moved")
-    print(f"{operation}: \"{original_path}\" => \"{new_path}\"")
-    undo_stack.append(lambda: os.rename(new_path, original_path))
+    print(f"{operation}: \"{source_path}\" => \"{destination_path}\"")
+    undo_stack.append(lambda: os.rename(destination_path, source_path))
     return undo_stack
 
 
@@ -282,14 +284,14 @@ class EditMoveContext:
     original_paths: typing.List[str]
     previous_paths: typing.List[str]
     new_paths: typing.List[str]
-    source_destination_list: \
-        typing.List[typing.Tuple[pathlib.Path, pathlib.Path]]
+    source_destination_deque: \
+        typing.Deque[typing.Tuple[pathlib.Path, pathlib.Path]]
 
     def __init__(self, original_paths: typing.List[str]) -> None:
         self.original_paths = original_paths
         self.previous_paths = original_paths
         self.new_paths = []
-        self.source_destination_list = []
+        self.source_destination_deque = collections.deque()
 
 
 def check_whitespace(ctx: EditMoveContext) -> None:
@@ -335,12 +337,12 @@ def check_collisions(ctx: EditMoveContext) -> None:
     """
     found_collision = False
     destination_paths = set()  # type: typing.Set[pathlib.Path]
-    for (_, new_path) in ctx.source_destination_list:
-        if new_path not in destination_paths:
-            destination_paths.add(new_path)
+    for (_, destination_path) in ctx.source_destination_deque:
+        if destination_path not in destination_paths:
+            destination_paths.add(destination_path)
         else:
             found_collision = True
-            print(f"\"{new_path}\" already used as a destination.",
+            print(f"\"{destination_path}\" already used as a destination.",
                   file=sys.stderr)
 
     if found_collision:
@@ -355,10 +357,15 @@ def check_collisions(ctx: EditMoveContext) -> None:
             assert response == "quit"
             raise AbortError(cancelled=True)
 
-    for (_, new_path) in ctx.source_destination_list:
-        if os.path.lexists(new_path):
+    renamed_sources = {source_path
+                       for (source_path, _) in ctx.source_destination_deque}
+    for (_, destination_path) in ctx.source_destination_deque:
+        # If A will be renamed to be B and B will be renamed to C, don't treat
+        # the existence of B as a collision.
+        if (destination_path not in renamed_sources
+                and os.path.lexists(destination_path)):
             found_collision = True
-            print(f"\"{new_path}\" already exists.")
+            print(f"\"{destination_path}\" already exists.")
 
     if found_collision:
         response = prompt("e: Edit (default)\n"
@@ -400,13 +407,13 @@ def check_paths(ctx: EditMoveContext) -> None:
     check_whitespace(ctx)
 
     # Filter out unchanged paths.
-    ctx.source_destination_list = [
+    ctx.source_destination_deque = collections.deque((
         (pathlib.Path(original_path), pathlib.Path(new_path))
         for (original_path, new_path) in zip(ctx.original_paths, ctx.new_paths)
         if original_path != new_path
-    ]
+    ))
 
-    if not ctx.source_destination_list:
+    if not ctx.source_destination_deque:
         print("Nothing to do.", file=sys.stderr)
         raise AbortError(cancelled=True)
 
@@ -422,8 +429,8 @@ def preview_renames(ctx: EditMoveContext) -> None:
     `AbortError` if the user chooses to quit.
     """
     print("The following files will be moved or renamed:")
-    for (original, new_path) in ctx.source_destination_list:
-        print(f"  \"{original}\" => \"{new_path}\"")
+    for (source_path, new_path) in ctx.source_destination_deque:
+        print(f"  \"{source_path}\" => \"{new_path}\"")
     response = prompt("p: Proceed (default)\n"
                       "e: Edit\n"
                       "q: Quit\n"
@@ -438,6 +445,28 @@ def preview_renames(ctx: EditMoveContext) -> None:
         assert response == "proceed"
 
 
+def temp_path_for(path: pathlib.Path) -> pathlib.Path:
+    """
+    Returns a path appropriate for a temporary file located in the same
+    directory as the input path.
+    """
+    counter = getattr(temp_path_for, "counter", 0)
+
+    parent = path.parent
+    while True:
+        temp_path = parent / f"{__name__}-{counter}.tmp"
+        if not os.path.lexists(temp_path):
+            setattr(temp_path_for, "counter", counter)
+            return temp_path
+        counter += 1
+
+
+def unzip(iterable: typing.Iterable[typing.Iterable]) \
+        -> typing.Iterable[typing.Iterable]:
+    """TODO"""
+    return zip(*iterable)
+
+
 def apply_moves(ctx: EditMoveContext) -> None:
     """
     Applies the move operations, prompting the user to take action if there are
@@ -445,21 +474,50 @@ def apply_moves(ctx: EditMoveContext) -> None:
     """
     undo_stack = []  # type: typing.List[typing.Callable[[], typing.Any]]
     failures = []  # type: typing.List[typing.Tuple[pathlib.Path, pathlib.Path, str]]
-    for (original_path, new_path) in ctx.source_destination_list:
+    (renamed_sources, renamed_destinations) = \
+        (set(iterable) for iterable in unzip(ctx.source_destination_deque))
+
+    temp_paths = {}   # type: typing.Dict[pathlib.Path, pathlib.Path]
+    while ctx.source_destination_deque:
+        (source_path, destination_path) = ctx.source_destination_deque.popleft()
         try:
-            undo_stack += move_file(original_path, new_path)
+            undo_stack += move_file(source_path, destination_path)
         except OSError as e:
-            failures.append((original_path, new_path,
-                             f"{e.strerror} (error code: {e.errno})"))
+            if (e.errno != errno.EEXIST
+                    or destination_path not in renamed_sources):
+                failures.append((source_path, destination_path,
+                                 f"{e.strerror} (error code: {e.errno})"))
+                continue
+
+            # To support rotating files, if the destination filename collides
+            # with a file that will also be renamed, defer this rename.  Rename
+            # to a temporary, intermediate name if another file wants our
+            # original filename.
+            if source_path not in renamed_destinations:
+                ctx.source_destination_deque.append((source_path,
+                                                     destination_path))
+                continue
+
+            temp_path = temp_path_for(source_path)
+            ctx.source_destination_deque.appendleft((source_path, temp_path))
+            ctx.source_destination_deque.append((temp_path, destination_path))
         except Exception as e:  # pylint: disable=broad-except
-            failures.append((original_path, new_path, str(e)))
+            failures.append((source_path, destination_path, str(e)))
 
     if not failures:
         return
 
-    for (original_path, new_path, reason) in failures:
-        print(f"Failed to move \"{original_path}\" to \"{new_path}\": {reason}",
-              file=sys.stderr)
+    for (source_path, destination_path, reason) in failures:
+        original_path = temp_paths.get(source_path)
+        if original_path:
+            print(f"Failed to move \"{source_path}\" "
+                  f"(originally \"{original_path}\") to "
+                  f"\"{destination_path}\": {reason}",
+                  file=sys.stderr)
+        else:
+            print(f"Failed to move \"{source_path}\" to "
+                  f"\"{destination_path}\": {reason}",
+                  file=sys.stderr)
 
     if not undo_stack:
         return
@@ -514,13 +572,6 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
     # Verify that all paths exist.
     directories_to_move = []  # type: typing.List[pathlib.Path]
     for path in original_paths:
-        # TODO: What to do about directories?
-        # * Moving directories along with all of their contents should be okay.
-        # * Unclear what to do if directory is renamed separately from a file
-        #   within it.
-        # * Maybe check if any renamed files are within a renamed directory and
-        #   fail?
-        # * Need to preserve ownership/permissions.
         path = pathlib.Path(os.path.abspath(path))
 
         ancestor_path = path
