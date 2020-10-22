@@ -98,7 +98,7 @@ def prompt(message: str, choices: typing.Iterable[str],
         if response[0] == "?":
             continue
 
-        selected_choices = []  # type: typing.List[typing.Tuple[str, str]]
+        selected_choices: typing.List[typing.Tuple[str, str]] = []
         for choice in normalized_choices:
             if choice[0].startswith(response[0]):
                 selected_choices.append(choice)
@@ -126,7 +126,7 @@ def run_editor(file_path: str, line_number: typing.Optional[int] = None,
 
     Raises an `AbortError` if an editor cannot be determined.
     """
-    options = []  # type: typing.List[str]
+    options: typing.List[str] = []
     use_posix_style = True
 
     editor = editor or os.environ.get("VISUAL") or os.environ.get("EDITOR")
@@ -257,7 +257,7 @@ def move_file(source_path: pathlib.Path, destination_path: pathlib.Path) \
     def undo_mkdir(path: pathlib.Path) -> typing.Callable[[], None]:
         return lambda: os.rmdir(path)
 
-    undo_stack = []  # type: typing.List[typing.Callable[[], typing.Any]]
+    undo_stack: typing.List[typing.Callable[[], typing.Any]] = []
 
     parts = destination_path.parent.parts
     ancestor_path = pathlib.Path()
@@ -336,7 +336,7 @@ def check_collisions(ctx: EditMoveContext) -> None:
     `AbortError` if the user chooses to quit.
     """
     found_collision = False
-    destination_paths = set()  # type: typing.Set[pathlib.Path]
+    destination_paths: typing.Set[pathlib.Path] = set()
     for (_, destination_path) in ctx.source_destination_list:
         if destination_path not in destination_paths:
             destination_paths.add(destination_path)
@@ -471,31 +471,32 @@ def apply_moves(ctx: EditMoveContext) -> None:
     # C => D rename first to unblock the rest.
     #
     # Use an `OrderedDict` to preserve the original order as much as possible.
-    source_destination_dict = \
-        collections.OrderedDict(ctx.source_destination_list)
-    source_destination_deque = collections.deque() \
-        # type: typing.Deque[typing.Tuple[pathlib.Path, pathlib.Path]]
+    source_destination_dict \
+        = collections.OrderedDict(ctx.source_destination_list)
+    source_destination_deque: \
+        typing.Deque[typing.Tuple[pathlib.Path, pathlib.Path]] \
+        = collections.deque()
     while source_destination_dict:
         # To preserve the original order as much as possible, keep track of
         # current chain of renames instead of appending directly the deque.
-        rename_chain = []  # type: typing.List[typing.Tuple[pathlib.Path, pathlib.Path]]
-        (source_path, destination_path) = \
-            source_destination_dict.popitem(last=False)
+        rename_chain: typing.List[typing.Tuple[pathlib.Path, pathlib.Path]] = []
+        (source_path, destination_path) \
+            = source_destination_dict.popitem(last=False)
         rename_chain.append((source_path, destination_path))
         while destination_path in source_destination_dict:
-            (source_path, destination_path) = \
-                (destination_path, source_destination_dict[destination_path])
+            (source_path, destination_path) \
+                = (destination_path, source_destination_dict[destination_path])
             rename_chain.append((source_path, destination_path))
             del source_destination_dict[source_path]
 
         source_destination_deque += reversed(rename_chain)
     assert len(source_destination_deque) == len(ctx.source_destination_list)
 
-    undo_stack = []  # type: typing.List[typing.Callable[[], typing.Any]]
-    failures = []  # type: typing.List[typing.Tuple[pathlib.Path, pathlib.Path, str]]
+    undo_stack: typing.List[typing.Callable[[], typing.Any]] = []
+    failures: typing.List[typing.Tuple[pathlib.Path, pathlib.Path, str]] = []
     renamed_sources = {source_path
                        for (source_path, _) in ctx.source_destination_list}
-    temp_paths = {}   # type: typing.Dict[pathlib.Path, pathlib.Path]
+    temp_paths: typing.Dict[pathlib.Path, pathlib.Path] = {}
     while source_destination_deque:
         (source_path, destination_path) = source_destination_deque.popleft()
         try:
@@ -581,7 +582,7 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
     original_paths.sort()
 
     # Verify that all paths exist.
-    directories_to_move = []  # type: typing.List[pathlib.Path]
+    directories_to_move: typing.List[pathlib.Path] = []
     for path in original_paths:
         path = pathlib.Path(os.path.abspath(path))
 
@@ -679,7 +680,7 @@ def main(argv: typing.List[str]) -> int:
         usage(file=sys.stderr)
         return 1
 
-    editor = None  # type: typing.Optional[str]
+    editor: typing.Optional[str] = None
     show_preview = True
     use_absolute_paths = False
 
