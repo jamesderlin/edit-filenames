@@ -391,8 +391,8 @@ def check_paths(ctx: EditMoveContext) -> None:
     if not ctx.new_paths:
         raise AbortError("Cancelling due to an empty file list.")
 
-    if len(ctx.original_paths) != len(ctx.new_paths):
-        print("Lines added or removed.", file=sys.stderr)
+    if len(ctx.new_paths) != len(ctx.original_paths):
+        print("Error: Lines may not be added or removed.", file=sys.stderr)
         response = prompt("r: Restart (default)\n"
                           "q: Quit\n"
                           "? [r] ",
@@ -555,8 +555,9 @@ def apply_moves(ctx: EditMoveContext) -> None:
         raise AbortError("Failed to undo changes.")
 
 
-def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
-              show_preview=True) -> None:
+def edit_move(original_paths: typing.List[str], *,
+              editor: str = None, use_absolute_paths=False, show_preview=True) \
+        -> None:
     """
     Opens the specified paths in an editor, sanity-checks the move operations,
     and applies the moves.
@@ -572,8 +573,15 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
 
     Raises an `AbortError` on failure or if the user chooses to quit.
     """
+    assert original_paths
+
     # Normalize paths.
     if use_absolute_paths:
+        # The only way to normalize paths with `pathlib.Path` is to use
+        # `pathlib.Path.resolve`, which also resolves symlinks.  We don't want
+        # to resolve symlinks (since we might want to rename the symlinks
+        # themselves), so we fall back to use `os.path.abspath`, which
+        # automatically normalizes (unlike `pathlib.Path.absolute`).
         original_paths = [os.path.abspath(path) for path in original_paths]
     else:
         original_paths = [os.path.normpath(path) for path in original_paths]
@@ -583,8 +591,8 @@ def edit_move(original_paths, *, editor=None, use_absolute_paths=False,
 
     # Verify that all paths exist.
     directories_to_move: typing.List[pathlib.Path] = []
-    for path in original_paths:
-        path = pathlib.Path(os.path.abspath(path))
+    for path_str in original_paths:
+        path = pathlib.Path(os.path.abspath(path_str))
 
         ancestor_path = path
         while True:
@@ -697,7 +705,11 @@ def main(argv: typing.List[str]) -> int:
         elif o == "--no-preview":
             show_preview = False
 
-    edit_move([pathlib.Path(arg) for arg in args],
+    if not args:
+        usage(file=sys.stderr)
+        return 1
+
+    edit_move(args,
               editor=editor,
               use_absolute_paths=use_absolute_paths,
               show_preview=show_preview)
