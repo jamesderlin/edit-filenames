@@ -22,6 +22,9 @@ Renames or moves files using a text editor.
 
 Allows paths to a large number of files to be edited using features of a text
 editor, such as search-and-replace or multi-cursor editing.
+
+See <https://github.com/jamesderlin/edit-filenames> for more information an
+for examples.
 """
 
 import collections
@@ -66,10 +69,12 @@ class RestartEdit(Exception):
         self.paths_to_edit = paths_to_edit
 
 
-def prompt(message: str, choices: typing.Iterable[str],
+def prompt(message: str, choices: typing.Iterable[str], *,
            default: typing.Optional[str] = None) -> str:
     """
-    Prompts the user to choose from a list of choices.
+    Prompts the user to choose from a list of choices.  Accepts any user input
+    that unambiguously matches the start of one of the choices.  Matches are
+    case-insensitive.
 
     Returns the selected choice.
 
@@ -111,7 +116,8 @@ def prompt(message: str, choices: typing.Iterable[str],
             print(f"Ambiguous choice: {response[1]}", file=sys.stderr)
 
 
-def run_editor(file_path: str, line_number: typing.Optional[int] = None,
+def run_editor(file_path: str, *,
+               line_number: typing.Optional[int] = None,
                editor: typing.Optional[str] = None) -> None:
     """
     Open the specified file in an editor at the specified line number, if
@@ -181,7 +187,8 @@ def extract_file_paths(lines: typing.List[str]) -> typing.List[str]:
 
 
 def edit_paths(paths: typing.Iterable[str], *,
-               editor: typing.Optional[str] = None) -> typing.List[str]:
+               editor: typing.Optional[str] = None,
+               show_instructions=True) -> typing.List[str]:
     """
     Opens the list of paths in the editor and returns the edited paths.
 
@@ -191,7 +198,7 @@ def edit_paths(paths: typing.Iterable[str], *,
     Raises an `AbortError` if we fail to execute the editor.
     """
     horizontal_rule = "*" * 70
-    instructions = [
+    instructions = [] if not show_instructions else [
         horizontal_rule,
         "* INSTRUCTIONS:",
         "*",
@@ -286,12 +293,15 @@ class EditMoveContext:
     new_paths: typing.List[str]
     source_destination_list: \
         typing.List[typing.Tuple[pathlib.Path, pathlib.Path]]
+    interactive: bool
 
-    def __init__(self, original_paths: typing.List[str]) -> None:
+    def __init__(self, original_paths: typing.List[str], *,
+                 interactive: bool) -> None:
         self.original_paths = original_paths
         self.previous_paths = original_paths
         self.new_paths = []
         self.source_destination_list = []
+        self.interactive = interactive
 
 
 def check_whitespace(ctx: EditMoveContext) -> None:
@@ -310,13 +320,18 @@ def check_whitespace(ctx: EditMoveContext) -> None:
         return
 
     print("Lines with trailing whitespace detected.", file=sys.stderr)
-    response = prompt("s: Strip trailing whitespace (default)\n"
-                      "p: Preserve all whitespace\n"
-                      "e: Edit\n"
-                      "q: Quit\n"
-                      "? [s] ",
-                      ("strip", "preserve", "edit", "quit"),
-                      default="strip")
+    if not ctx.interactive:
+        print("Automatically stripping trailing whitespace.", file=sys.stderr)
+        response = "strip"
+    else:
+        response = prompt("s: Strip trailing whitespace (default)\n"
+                          "p: Preserve all whitespace\n"
+                          "e: Edit\n"
+                          "q: Quit\n"
+                          "? [s] ",
+                          ("strip", "preserve", "edit", "quit"),
+                          default="strip")
+
     if response == "strip":
         ctx.new_paths = [path.rstrip() for path in ctx.new_paths]
     elif response == "edit":
@@ -346,11 +361,15 @@ def check_collisions(ctx: EditMoveContext) -> None:
                   file=sys.stderr)
 
     if found_collision:
-        response = prompt("r: Restart (default)\n"
-                          "q: Quit\n"
-                          "? [r] ",
-                          ("restart", "quit"),
-                          default="restart")
+        if not ctx.interactive:
+            response = "quit"
+        else:
+            response = prompt("r: Restart (default)\n"
+                              "q: Quit\n"
+                              "? [r] ",
+                              ("restart", "quit"),
+                              default="restart")
+
         if response == "restart":
             raise RestartEdit(ctx.previous_paths)
         else:
@@ -368,11 +387,15 @@ def check_collisions(ctx: EditMoveContext) -> None:
             print(f"\"{destination_path}\" already exists.")
 
     if found_collision:
-        response = prompt("e: Edit (default)\n"
-                          "q: Quit\n"
-                          "? [e] ",
-                          ("edit", "quit"),
-                          default="edit")
+        if not ctx.interactive:
+            response = "quit"
+        else:
+            response = prompt("e: Edit (default)\n"
+                              "q: Quit\n"
+                              "? [e] ",
+                              ("edit", "quit"),
+                              default="edit")
+
         if response == "edit":
             raise RestartEdit(ctx.new_paths)
         else:
@@ -393,11 +416,15 @@ def check_paths(ctx: EditMoveContext) -> None:
 
     if len(ctx.new_paths) != len(ctx.original_paths):
         print("Error: Lines may not be added or removed.", file=sys.stderr)
-        response = prompt("r: Restart (default)\n"
-                          "q: Quit\n"
-                          "? [r] ",
-                          ("restart", "quit"),
-                          default="restart")
+        if not ctx.interactive:
+            response = "quit"
+        else:
+            response = prompt("r: Restart (default)\n"
+                              "q: Quit\n"
+                              "? [r] ",
+                              ("restart", "quit"),
+                              default="restart")
+
         if response == "quit":
             raise AbortError(cancelled=True)
         else:
@@ -428,6 +455,9 @@ def preview_renames(ctx: EditMoveContext) -> None:
     Raises `RestartEdit` if the user chooses to re-edit the paths.  Raises an
     `AbortError` if the user chooses to quit.
     """
+    if not ctx.interactive:
+        return
+
     print("The following files will be moved or renamed:")
     for (source_path, new_path) in ctx.source_destination_list:
         print(f"  \"{source_path}\" => \"{new_path}\"")
@@ -534,11 +564,16 @@ def apply_moves(ctx: EditMoveContext) -> None:
     if not undo_stack:
         return
 
-    response = prompt("k: Keep successful changes (default)\n"
-                      "u: Undo all changes\n"
-                      "? [k] ",
-                      ("undo", "keep"),
-                      default="keep")
+    if not ctx.interactive:
+        print("Undoing all changes.", file=sys.stderr)
+        response = "undo"
+    else:
+        response = prompt("k: Keep successful changes (default)\n"
+                          "u: Undo all changes\n"
+                          "? [k] ",
+                          ("undo", "keep"),
+                          default="keep")
+
     if response == "keep":
         return
 
@@ -556,8 +591,9 @@ def apply_moves(ctx: EditMoveContext) -> None:
 
 
 def edit_move(original_paths: typing.List[str], *,
-              editor: str = None, use_absolute_paths=False, show_preview=True) \
-        -> None:
+              editor: str = None,
+              interactive=True,
+              use_absolute_paths=False) -> None:
     """
     Opens the specified paths in an editor, sanity-checks the move operations,
     and applies the moves.
@@ -565,11 +601,11 @@ def edit_move(original_paths: typing.List[str], *,
     If no editor is specified, one will be determined automatically. (See
     `run_editor`.)
 
+    If `interactive` is `True`, prompts the user for confirmation before
+    performing operations.
+
     If `use_absolute_paths` is `True`, the file paths will be opened in the
     editor using absolute paths.
-
-    If `show_preview` is `True`, prompts the user for confirmation before
-    applying the moves.
 
     Raises an `AbortError` on failure or if the user chooses to quit.
     """
@@ -610,17 +646,23 @@ def edit_move(original_paths: typing.List[str], *,
         elif not os.path.lexists(path):
             raise AbortError(f"\"{path}\" not found.")
 
-    ctx = EditMoveContext(original_paths)
+    ctx = EditMoveContext(original_paths, interactive=interactive)
 
     sanitized_paths = [sanitized_path(path) for path in ctx.original_paths]
     if sanitized_paths != ctx.original_paths:
         print("Non-printable characters found in paths.",
               file=sys.stderr)
-        response = prompt("r: Replace non-printable characters (default)\n"
-                          "q: Quit\n"
-                          "? [r] ",
-                          ("replace", "quit"),
-                          default="replace")
+        if not ctx.interactive:
+            print("Automatically replacing non-printable characters.",
+                  file=sys.stderr)
+            response = "replace"
+        else:
+            response = prompt("r: Replace non-printable characters (default)\n"
+                              "q: Quit\n"
+                              "? [r] ",
+                              ("replace", "quit"),
+                              default="replace")
+
         if response == "quit":
             raise AbortError(cancelled=True)
         else:
@@ -631,14 +673,12 @@ def edit_move(original_paths: typing.List[str], *,
         try:
             assert len(paths_to_edit) == len(original_paths)
             ctx.previous_paths = paths_to_edit
-            ctx.new_paths = edit_paths(paths_to_edit, editor=editor)
+            ctx.new_paths = edit_paths(paths_to_edit, editor=editor,
+                                       show_instructions=interactive)
             ctx.new_paths = [os.path.normpath(path) for path in ctx.new_paths]
 
             check_paths(ctx)
-
-            if show_preview:
-                preview_renames(ctx)
-
+            preview_renames(ctx)
             apply_moves(ctx)
             break
 
@@ -647,7 +687,26 @@ def edit_move(original_paths: typing.List[str], *,
             continue
 
 
-def usage(full: bool = False, file: typing.TextIO = sys.stdout) -> None:
+_usage_text = """
+Options:
+    -e EDITOR, --editor=EDITOR
+        The path to the editor to use, along with any desired command-line
+        options.  If not specified, the editor will be automatically chosen
+        from the `VISUAL` or `EDITOR` environment variables.
+
+    --absolute
+        Use absolute file paths.
+
+    --non-interactives
+        Disables all confirmation prompts and disables showing instructions in
+        the editor.  Useful for automated editing.
+
+        In non-interactive mode, automatically undoes any changes and aborts
+        when encountering any failure.
+"""
+
+
+def usage(*, full: bool = False, file: typing.TextIO = sys.stdout) -> None:
     """Prints usage information."""
     print(f"Usage: {__name__} [OPTIONS] FILE [FILE ...]\n"
           f"       {__name__} --help\n",
@@ -657,19 +716,7 @@ def usage(full: bool = False, file: typing.TextIO = sys.stdout) -> None:
         print(f"\n"
               f"{__doc__.strip()}\n"
               f"\n"
-              f"Options:\n"
-              f"    -e EDITOR, --editor=EDITOR\n"
-              f"        The path to the editor to use, along with any desired command-line\n"
-              f"        options.  If not specified, the editor will be automatically chosen\n"
-              f"        from the `VISUAL` or `EDITOR` environment variables.\n"
-              f"\n"
-              f"    --absolute\n"
-              f"        Use absolute file paths.\n"
-              f"\n"
-              f"    --no-preview\n"
-              f"        Disables showing a preview and asking for confirmation before\n"
-              f"        performing any rename or move operations.\n"
-              f"\n",
+              f"{_usage_text}\n",
               file=file,
               end="")
 
@@ -681,15 +728,15 @@ def main(argv: typing.List[str]) -> int:
                                      ["help",
                                       "editor=",
                                       "absolute",
-                                      "preview",
-                                      "no-preview"])
+                                      "interactive",
+                                      "non-interactive"])
     except getopt.GetoptError as e:
         print(str(e), file=sys.stderr)
         usage(file=sys.stderr)
         return 1
 
     editor: typing.Optional[str] = None
-    show_preview = True
+    interactive = True
     use_absolute_paths = False
 
     for (o, a) in opts:
@@ -700,10 +747,10 @@ def main(argv: typing.List[str]) -> int:
             editor = a
         elif o == "--absolute":
             use_absolute_paths = True
-        elif o == "--preview":
-            show_preview = True
-        elif o == "--no-preview":
-            show_preview = False
+        elif o == "--interactive":
+            interactive = True
+        elif o == "--non-interactive":
+            interactive = False
 
     if not args:
         usage(file=sys.stderr)
@@ -711,8 +758,8 @@ def main(argv: typing.List[str]) -> int:
 
     edit_move(args,
               editor=editor,
-              use_absolute_paths=use_absolute_paths,
-              show_preview=show_preview)
+              interactive=interactive,
+              use_absolute_paths=use_absolute_paths)
     return 0
 
 
