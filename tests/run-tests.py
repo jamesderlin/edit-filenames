@@ -30,36 +30,76 @@ def fake_run_editor(mock_contents: str):
     return run_editor
 
 
+class FakeFileTable:
+    def __init__(self):
+        self.existing_files = set()
+        self.existing_directories = set()
+
+    def clear(self):
+        self.existing_files.clear()
+        self.existing_directories.clear()
+
+    def add_files(self, paths):
+        paths = [os.path.abspath(path) for path in paths]
+        self.existing_files.update(paths)
+        self.add_directories((os.path.dirname(path) for path in paths))
+
+    def add_directories(self, paths):
+        for path in paths:
+            while True:
+                assert path not in self.existing_files
+                if path in self.existing_directories:
+                    break
+                self.existing_directories.add(path)
+                path = os.path.dirname(path)
+
+    def exists(self, path):
+        return self.is_file(path) or self.is_dir(path)
+
+    def is_file(self, path):
+        return os.path.abspath(path) in self.existing_files
+
+    def is_dir(self, path):
+        return os.path.abspath(path) in self.existing_directories
+
+
+theFakeFileTable = FakeFileTable()
+
+
+class FakePath(pathlib.Path):
+    def __init__(self, raw_path):
+        super().__init__(raw_path)
+        self.raw_path = raw_path
+
+    def exists(self):
+        return os.path.exists(self.raw_path)
+
+    def is_dir(self):
+        return os.path.is_dir(self.raw_path)
+
+
 class TestEditFilenames(unittest.TestCase):
     """Tests functions from `edit-filenames`."""
 
     def setUp(self):
+        theFakeFileTable = FakeFileTable()
+
+    def tearDown(self):
         pass
 
     def test_edit_move(self):
         """Tests `edit_filenames.edit_move`."""
         original_filename_list = ["foo", "bar", "baz", "qux"]
         new_filenames = "foo.ext\nbar.ext\nbaz.ext\nqux.ext\n"
-        edit_filenames.run_editor = fake_run_editor(new_filenames)
 
-        def fake_exists(path):
-            lst = original_filename_list + [os.path.abspath(p) for p in original_filename_list]
-            return str(path) in lst
+        fake_file_table = FakeFileTable()
+        fake_file_table.add_files(original_filename_list)
 
-        class FakePath(pathlib.Path):
-            def __init__(self, raw_path):
-                super().__init__(raw_path)
-                self.raw_path = raw_path
-
-            def exists(self):
-                return fake_exists(self.raw_path)
-
-            def is_dir(self):
-                return False
-
-        with unittest.mock.patch("shutil.move") as mock_move, \
-             unittest.mock.patch("os.path.lexists", fake_exists), \
-             unittest.mock.patch("pathlib.Path", FakePath) as mock_path:
+        with unittest.mock.patch("edit_filenames.run_editor",
+                                 fake_run_editor(new_filenames)), \
+             unittest.mock.patch("shutil.move") as mock_move, \
+             unittest.mock.patch("os.path.lexists", fake_file_table.exists), \
+             unittest.mock.patch("pathlib.Path", FakePath):
 
             # debug_prompt()
             exit_code = edit_filenames.edit_move(original_filename_list,
