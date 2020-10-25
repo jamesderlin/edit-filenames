@@ -6,39 +6,39 @@ import errno
 import os
 import pathlib
 import sys
+import typing
 import unittest
 import unittest.mock
 
 import edit_filenames
 
 
-def fake_run_editor(mock_contents: str):
-    def run_editor(file_path: str, **_kwargs):
+def fake_run_editor(mock_contents: str) -> typing.Callable:
+    def run_editor(file_path: str, **_kwargs) -> None:
         with open(file_path, "w") as file:
             print(mock_contents, file=file, end="")
     return run_editor
 
 
 class FakeFileTable:
-    def __init__(self):
+    existing_files: typing.Set[str]
+    existing_directories: typing.Set[str]
+
+    def __init__(self) -> None:
         self.existing_files = set()
         self.existing_directories = set()
 
-    def clear(self):
-        self.existing_files.clear()
-        self.existing_directories.clear()
-
-    def add_files(self, paths):
+    def add_files(self, paths: typing.Iterable[str]) -> None:
         paths = [os.path.abspath(path) for path in paths]
         self.existing_files.update(paths)
         self.add_directories((os.path.dirname(path) for path in paths))
 
-    def remove_paths(self, paths):
+    def remove_paths(self, paths: typing.Iterable[str]) -> None:
         paths = [os.path.abspath(path) for path in paths]
         self.existing_files.difference_update(paths)
         self.existing_directories.difference_update(paths)
 
-    def add_directories(self, paths):
+    def add_directories(self, paths: typing.Iterable[str]) -> None:
         for path in paths:
             while True:
                 assert path not in self.existing_files
@@ -47,45 +47,51 @@ class FakeFileTable:
                 self.existing_directories.add(path)
                 path = os.path.dirname(path)
 
-    def exists(self, path):
+    def exists(self, path: str) -> bool:
         return self.is_file(path) or self.is_dir(path)
 
-    def is_file(self, path):
+    def is_file(self, path: str) -> bool:
         return os.path.abspath(path) in self.existing_files
 
-    def is_dir(self, path):
+    def is_dir(self, path: str) -> bool:
         return os.path.abspath(path) in self.existing_directories
 
 
 class TestContext:
-    def __init__(self):
+    original_filename_list: typing.List[str]
+    new_filenames: str
+    fake_file_table: FakeFileTable
+
+    def __init__(self) -> None:
         self.original_filename_list = []
         self.new_filenames = ""
         self.fake_file_table = FakeFileTable()
 
 
 class FakePath(pathlib.Path):
+    raw_path: str
+
     def __init__(self, raw_path):
         super().__init__(raw_path)
         self.raw_path = raw_path
 
-    def exists(self):
+    def exists(self) -> bool:
         return os.path.exists(self.raw_path)
 
-    def is_dir(self):
+    def is_dir(self) -> bool:
         return os.path.isdir(self.raw_path)
 
 
-def fake_print(original_print):
-    def helper(*args, **kwargs):
+def fake_print(original_print: typing.Callable) -> typing.Callable:
+    def helper(*args, **kwargs) -> None:
         file = kwargs.get('file')
         if file is not None and file != sys.stdout:
             original_print(*args, **kwargs)
     return helper
 
 
-def fake_move(test_ctx):
-    def helper(source_path, destination_path):
+def fake_move(test_ctx: TestContext) -> typing.Callable:
+    def helper(source_path: str, destination_path: str) -> None:
         if not test_ctx.fake_file_table.exists(source_path):
             raise OSError(errno.ENOENT, f"{source_path} not found.", source_path)
         if test_ctx.fake_file_table.exists(destination_path):
@@ -99,9 +105,9 @@ def fake_move(test_ctx):
     return helper
 
 
-def expect_edit_move(original_filename_list,
-                     new_filenames,
-                     expected_move_calls):
+def expect_edit_move(original_filename_list: typing.List[str],
+                     new_filenames: str,
+                     expected_move_calls: typing.List) -> None:
     test_ctx = TestContext()
     test_ctx.original_filename_list = original_filename_list
     test_ctx.new_filenames = new_filenames
@@ -126,13 +132,7 @@ def expect_edit_move(original_filename_list,
 class TestEditFilenames(unittest.TestCase):
     """Tests functions from `edit-filenames`."""
 
-    def setUp(self):
-        pass
-
-    def tearDown(self):
-        pass
-
-    def test_edit_move_basic(self):
+    def test_edit_move_basic(self) -> None:
         """Tests basic renaming."""
 
         original_filename_list = ["bar", "baz", "foo", "qux"]
@@ -163,7 +163,7 @@ class TestEditFilenames(unittest.TestCase):
                          new_filenames + "\n\n",
                          expected_calls)
 
-    def test_edit_move_rotate_left(self):
+    def test_edit_move_rotate_left(self) -> None:
         """Tests renaming files by rotating filenames left."""
         expect_edit_move(
             ["foo.1", "foo.2", "foo.3", "foo.4"],
@@ -176,7 +176,7 @@ class TestEditFilenames(unittest.TestCase):
                 unittest.mock.call("edit_filenames-0.tmp", "foo.1"),
             ])
 
-    def test_edit_move_rotate_right(self):
+    def test_edit_move_rotate_right(self) -> None:
         """Tests renaming files by rotating filenames right."""
         expect_edit_move(
             ["foo.1", "foo.2", "foo.3", "foo.4"],
