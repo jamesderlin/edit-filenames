@@ -2,11 +2,9 @@
 
 """Unit tests for edit-filenames."""
 
-import contextlib
+import errno
 import os
 import pathlib
-import shutil
-import subprocess
 import sys
 import unittest
 import unittest.mock
@@ -14,18 +12,8 @@ import unittest.mock
 import edit_filenames
 
 
-def debug_prompt():
-    """Starts an interactive Python prompt."""
-    # pylint: disable=import-outside-toplevel
-    import code
-    import inspect
-    previous_frame = inspect.currentframe().f_back
-    code.interact(local=dict(**previous_frame.f_globals,
-                             **previous_frame.f_locals))
-
-
 def fake_run_editor(mock_contents: str):
-    def run_editor(file_path: str, **kwargs):
+    def run_editor(file_path: str, **_kwargs):
         with open(file_path, "w") as file:
             print(mock_contents, file=file, end="")
     return run_editor
@@ -69,7 +57,11 @@ class FakeFileTable:
         return os.path.abspath(path) in self.existing_directories
 
 
-the_fake_file_table = FakeFileTable()
+class TestContext:
+    def __init__(self):
+        self.original_filename_list = []
+        self.new_filenames = ""
+        self.fake_file_table = FakeFileTable()
 
 
 class FakePath(pathlib.Path):
@@ -81,7 +73,7 @@ class FakePath(pathlib.Path):
         return os.path.exists(self.raw_path)
 
     def is_dir(self):
-        return os.path.is_dir(self.raw_path)
+        return os.path.isdir(self.raw_path)
 
 
 def fake_print(original_print):
@@ -92,76 +84,91 @@ def fake_print(original_print):
     return helper
 
 
-def fake_move(source_path, destination_path):
-    if not the_fake_file_table.exists(source_path):
-        raise OSError(errno.ENOENT, f"{source_path} not found.", source_path)
-    if the_fake_file_table.exists(destination_path):
-        raise OSError(errno.EEXIST, f"{destination_path} already exists",
-                      destination_path)
-    if the_fake_file_table.is_dir(source_path):
-        the_fake_file_table.add_directories([destination_path])
-    else:
-        the_fake_file_table.add_files([destination_path])
-    the_fake_file_table.remove_paths([source_path])
+def fake_move(test_ctx):
+    def helper(source_path, destination_path):
+        if not test_ctx.fake_file_table.exists(source_path):
+            raise OSError(errno.ENOENT, f"{source_path} not found.", source_path)
+        if test_ctx.fake_file_table.exists(destination_path):
+            raise OSError(errno.EEXIST, f"{destination_path} already exists",
+                          destination_path)
+        if test_ctx.fake_file_table.is_dir(source_path):
+            test_ctx.fake_file_table.add_directories([destination_path])
+        else:
+            test_ctx.fake_file_table.add_files([destination_path])
+        test_ctx.fake_file_table.remove_paths([source_path])
+    return helper
 
 
-@contextlib.contextmanager
-def default_patches(original_filename_list, new_filenames):
-    the_fake_file_table.add_files(original_filename_list)
-    with unittest.mock.patch("edit_filenames.run_editor",
-                             fake_run_editor(new_filenames)), \
-         unittest.mock.patch("shutil.move", side_effect=fake_move) as mock_move, \
-         unittest.mock.patch("os.path.lexists", the_fake_file_table.exists), \
+def expect_edit_move(original_filename_list,
+                     new_filenames,
+                     expected_move_calls):
+    test_ctx = TestContext()
+    test_ctx.original_filename_list = original_filename_list
+    test_ctx.new_filenames = new_filenames
+
+    test_ctx.fake_file_table.add_files(test_ctx.original_filename_list)
+
+    with unittest.mock.patch("os.path.lexists",
+                             test_ctx.fake_file_table.exists), \
          unittest.mock.patch("pathlib.Path", FakePath), \
-         unittest.mock.patch("builtins.print", fake_print(print)):
+         unittest.mock.patch("builtins.print", fake_print(print)), \
+         unittest.mock.patch("edit_filenames.run_editor",
+                             fake_run_editor(test_ctx.new_filenames)), \
+         unittest.mock.patch("shutil.move",
+                             side_effect=fake_move(test_ctx),
+                             autospec=True) as mock_move:
 
-         yield mock_move
+        edit_filenames.edit_move(test_ctx.original_filename_list,
+                                 interactive=False)
+        mock_move.assert_has_calls(expected_move_calls)
 
 
 class TestEditFilenames(unittest.TestCase):
     """Tests functions from `edit-filenames`."""
 
     def setUp(self):
-        the_fake_file_table = FakeFileTable()
+        pass
 
     def tearDown(self):
         pass
 
     def test_edit_move_basic(self):
-        """Basic tests `edit_filenames.edit_move`."""
+        """Tests basic renaming."""
+
         original_filename_list = ["bar", "baz", "foo", "qux"]
         new_filenames = "bar.ext\nbaz.ext\nfoo.ext\nqux.ext\n"
+        expected_calls = [
+            unittest.mock.call("bar", "bar.ext"),
+            unittest.mock.call("baz", "baz.ext"),
+            unittest.mock.call("foo", "foo.ext"),
+            unittest.mock.call("qux", "qux.ext")
+        ]
 
-        # TODO: Verify that trailing newlines in editor output don't matter.
-        for original_order in (True, False):
-            the_fake_file_table.clear()
+        expect_edit_move(original_filename_list,
+                         new_filenames,
+                         expected_calls)
 
-            if not original_order:
-                # Verify that order of the original file paths does not matter.
-                original_filename_list.reverse()
+        # Verify that order of the original file paths does not matter.
+        expect_edit_move(list(reversed(original_filename_list)),
+                         new_filenames,
+                         expected_calls)
 
-            with default_patches(original_filename_list,
-                                 new_filenames) as mock_move:
-                # debug_prompt()
-                exit_code = edit_filenames.edit_move(original_filename_list,
-                                                     interactive=False)
-                mock_move.assert_has_calls([
-                    unittest.mock.call("bar", "bar.ext"),
-                    unittest.mock.call("baz", "baz.ext"),
-                    unittest.mock.call("foo", "foo.ext"),
-                    unittest.mock.call("qux", "qux.ext"),
-                ])
+        # Verify that renames work if there is no terminating newline.
+        expect_edit_move(original_filename_list,
+                         new_filenames.rstrip(),
+                         expected_calls)
+
+        # Verify that renames work if there are extra trailing newlines.
+        expect_edit_move(original_filename_list,
+                         new_filenames + "\n\n",
+                         expected_calls)
 
     def test_edit_move_rotate_left(self):
-        """Tests `edit_filenames.edit_move`."""
-        original_filename_list = ["foo.1", "foo.2", "foo.3", "foo.4"]
-        new_filenames = "foo.2\nfoo.3\nfoo.4\nfoo.1\n"
-
-        with default_patches(original_filename_list,
-                             new_filenames) as mock_move:
-            exit_code = edit_filenames.edit_move(original_filename_list,
-                                                 interactive=False)
-            mock_move.assert_has_calls([
+        """Tests renaming files by rotating filenames left."""
+        expect_edit_move(
+            ["foo.1", "foo.2", "foo.3", "foo.4"],
+            "foo.2\nfoo.3\nfoo.4\nfoo.1\n",
+            [
                 unittest.mock.call("foo.4", "edit_filenames-0.tmp"),
                 unittest.mock.call("foo.3", "foo.4"),
                 unittest.mock.call("foo.2", "foo.3"),
@@ -170,15 +177,11 @@ class TestEditFilenames(unittest.TestCase):
             ])
 
     def test_edit_move_rotate_right(self):
-        """Tests `edit_filenames.edit_move`."""
-        original_filename_list = ["foo.1", "foo.2", "foo.3", "foo.4"]
-        new_filenames = "foo.4\nfoo.1\nfoo.2\nfoo.3\n"
-
-        with default_patches(original_filename_list,
-                             new_filenames) as mock_move:
-            exit_code = edit_filenames.edit_move(original_filename_list,
-                                                 interactive=False)
-            mock_move.assert_has_calls([
+        """Tests renaming files by rotating filenames right."""
+        expect_edit_move(
+            ["foo.1", "foo.2", "foo.3", "foo.4"],
+            "foo.4\nfoo.1\nfoo.2\nfoo.3\n",
+            [
                 unittest.mock.call("foo.2", "edit_filenames-0.tmp"),
                 unittest.mock.call("foo.3", "foo.2"),
                 unittest.mock.call("foo.4", "foo.3"),
@@ -187,9 +190,5 @@ class TestEditFilenames(unittest.TestCase):
             ])
 
 
-def main(argv):
-    unittest.main()
-
-
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    unittest.main()
