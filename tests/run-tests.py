@@ -4,7 +4,7 @@
 
 import errno
 import os
-import pathlib
+import stat
 import sys
 import typing
 import unittest
@@ -47,14 +47,24 @@ class FakeFileTable:
                 self.existing_directories.add(path)
                 path = os.path.dirname(path)
 
-    def exists(self, path: str) -> bool:
-        return self.is_file(path) or self.is_dir(path)
+    def stat(self, path: os.PathLike, *,
+             dir_fd=None, follow_symlinks=True) -> os.stat_result:
+        path = os.path.abspath(path)
 
-    def is_file(self, path: str) -> bool:
-        return os.path.abspath(path) in self.existing_files
+        result = [0 for i in range(10)]
+        if path in self.existing_files:
+            result[stat.ST_MODE] = stat.S_IFREG
+        elif path in self.existing_directories:
+            result[stat.ST_MODE] = stat.S_IFDIR
+        else:
+            raise OSError(errno.ENOENT, "No such file or directory", path)
 
-    def is_dir(self, path: str) -> bool:
-        return os.path.abspath(path) in self.existing_directories
+        result[stat.ST_MODE] |= stat.S_IRUSR | stat.S_IWUSR
+
+        return os.stat_result(tuple(result))
+
+    def lstat(self, path: os.PathLike, *, dir_fd=None) -> os.stat_result:
+        return self.stat(path, dir_fd=dir_fd, follow_symlinks=False)
 
 
 class TestContext:
@@ -68,20 +78,6 @@ class TestContext:
         self.fake_file_table = FakeFileTable()
 
 
-class FakePath(pathlib.Path):
-    raw_path: str
-
-    def __init__(self, raw_path):
-        super().__init__(raw_path)
-        self.raw_path = raw_path
-
-    def exists(self) -> bool:
-        return os.path.exists(self.raw_path)
-
-    def is_dir(self) -> bool:
-        return os.path.isdir(self.raw_path)
-
-
 def fake_print(original_print: typing.Callable) -> typing.Callable:
     def helper(*args, **kwargs) -> None:
         file = kwargs.get('file')
@@ -92,12 +88,12 @@ def fake_print(original_print: typing.Callable) -> typing.Callable:
 
 def fake_move(test_ctx: TestContext) -> typing.Callable:
     def helper(source_path: str, destination_path: str) -> None:
-        if not test_ctx.fake_file_table.exists(source_path):
+        if not os.path.exists(source_path):
             raise OSError(errno.ENOENT, f"{source_path} not found.", source_path)
-        if test_ctx.fake_file_table.exists(destination_path):
+        if os.path.exists(destination_path):
             raise OSError(errno.EEXIST, f"{destination_path} already exists",
                           destination_path)
-        if test_ctx.fake_file_table.is_dir(source_path):
+        if os.path.isdir(source_path):
             test_ctx.fake_file_table.add_directories([destination_path])
         else:
             test_ctx.fake_file_table.add_files([destination_path])
@@ -114,9 +110,8 @@ def expect_edit_move(original_filename_list: typing.List[str],
 
     test_ctx.fake_file_table.add_files(test_ctx.original_filename_list)
 
-    with unittest.mock.patch("os.path.lexists",
-                             test_ctx.fake_file_table.exists), \
-         unittest.mock.patch("pathlib.Path", FakePath), \
+    with unittest.mock.patch("os.stat", test_ctx.fake_file_table.stat), \
+         unittest.mock.patch("os.lstat", test_ctx.fake_file_table.lstat), \
          unittest.mock.patch("builtins.print", fake_print(print)), \
          unittest.mock.patch("edit_filenames.run_editor",
                              fake_run_editor(test_ctx.new_filenames)), \
