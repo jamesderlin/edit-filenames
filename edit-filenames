@@ -441,8 +441,7 @@ def check_paths(ctx: EditMoveContext) -> None:
     ]
 
     if not ctx.source_destination_list:
-        print("Nothing to do.", file=sys.stderr)
-        raise AbortError(cancelled=True)
+        raise AbortError("Nothing to do.")
 
     check_collisions(ctx)
 

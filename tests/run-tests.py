@@ -13,13 +13,6 @@ import unittest.mock
 import edit_filenames
 
 
-def fake_run_editor(mock_contents: str) -> typing.Callable:
-    def run_editor(file_path: str, **_kwargs) -> None:
-        with open(file_path, "w") as file:
-            print(mock_contents, file=file, end="")
-    return run_editor
-
-
 class FakeFileTable:
     existing_files: typing.Set[str]
     existing_directories: typing.Set[str]
@@ -78,12 +71,13 @@ class TestContext:
         self.fake_file_table = FakeFileTable()
 
 
-def fake_print(original_print: typing.Callable) -> typing.Callable:
-    def helper(*args, **kwargs) -> None:
-        file = kwargs.get('file')
-        if file is not None and file != sys.stdout:
-            original_print(*args, **kwargs)
-    return helper
+_original_print = print
+
+
+def fake_print(*args, **kwargs) -> None:
+    file = kwargs.get('file')
+    if file is not None and file != sys.stdout and file != sys.stderr:
+        _original_print(*args, **kwargs)
 
 
 def fake_move(test_ctx: TestContext) -> typing.Callable:
@@ -101,10 +95,20 @@ def fake_move(test_ctx: TestContext) -> typing.Callable:
     return helper
 
 
-def expect_edit_move(original_filename_list: typing.List[str],
+def fake_run_editor(mock_contents: str) -> typing.Callable:
+    def run_editor(file_path: str, **_kwargs) -> None:
+        with open(file_path, "w") as file:
+            print(mock_contents, file=file, end="")
+    return run_editor
+
+
+def expect_edit_move(test_case: unittest.TestCase,
+                     original_filename_list: typing.List[str],
                      new_filenames: str,
-                     expected_move_calls: typing.List) -> None:
-    test_ctx = TestContext()
+                     expected_move_calls: typing.List,
+                     test_ctx: TestContext = None,
+                     raises: typing.Any = None) -> None:
+    test_ctx = test_ctx or TestContext()
     test_ctx.original_filename_list = original_filename_list
     test_ctx.new_filenames = new_filenames
 
@@ -112,24 +116,31 @@ def expect_edit_move(original_filename_list: typing.List[str],
 
     with unittest.mock.patch("os.stat", test_ctx.fake_file_table.stat), \
          unittest.mock.patch("os.lstat", test_ctx.fake_file_table.lstat), \
-         unittest.mock.patch("builtins.print", fake_print(print)), \
+         unittest.mock.patch("builtins.print", fake_print), \
          unittest.mock.patch("edit_filenames.run_editor",
                              fake_run_editor(test_ctx.new_filenames)), \
          unittest.mock.patch("shutil.move",
                              side_effect=fake_move(test_ctx),
                              autospec=True) as mock_move:
 
-        edit_filenames.edit_move(test_ctx.original_filename_list,
-                                 interactive=False)
+        try:
+            edit_filenames.edit_move(test_ctx.original_filename_list,
+                                     interactive=False)
+        except Exception as e:
+            if raises:
+                test_case.assertIsInstance(e, raises)
+                for filename in original_filename_list:
+                    test_case.assertTrue(os.path.exists(filename))
+            else:
+                raise
+
         mock_move.assert_has_calls(expected_move_calls)
 
 
 class TestEditFilenames(unittest.TestCase):
     """Tests functions from `edit-filenames`."""
-
     def test_edit_move_basic(self) -> None:
         """Tests basic renaming."""
-
         original_filename_list = ["bar", "baz", "foo", "qux"]
         new_filenames = "bar.ext\nbaz.ext\nfoo.ext\nqux.ext\n"
         expected_calls = [
@@ -139,28 +150,77 @@ class TestEditFilenames(unittest.TestCase):
             unittest.mock.call("qux", "qux.ext")
         ]
 
-        expect_edit_move(original_filename_list,
+        expect_edit_move(self,
+                         original_filename_list,
                          new_filenames,
                          expected_calls)
 
         # Verify that order of the original file paths does not matter.
-        expect_edit_move(list(reversed(original_filename_list)),
+        expect_edit_move(self,
+                         list(reversed(original_filename_list)),
                          new_filenames,
                          expected_calls)
 
         # Verify that renames work if there is no terminating newline.
-        expect_edit_move(original_filename_list,
+        expect_edit_move(self,
+                         original_filename_list,
                          new_filenames.rstrip(),
                          expected_calls)
 
         # Verify that renames work if there are extra trailing newlines.
-        expect_edit_move(original_filename_list,
+        expect_edit_move(self,
+                         original_filename_list,
                          new_filenames + "\n\n",
                          expected_calls)
+
+    def test_edit_move_no_op(self) -> None:
+        """Tests nothing to do."""
+        expect_edit_move(
+            self,
+            ["bar", "baz", "foo"],
+            "bar\nbaz\nfoo\n",
+            [],
+            raises=edit_filenames.AbortError)
+
+    def test_edit_move_duplicate_destination(self) -> None:
+        expect_edit_move(
+            self,
+            ["bar", "foo"],
+            "baz\nbaz\n",
+            [],
+            raises=edit_filenames.AbortError)
+
+    def test_edit_move_existing_destination(self) -> None:
+        test_ctx = TestContext()
+        test_ctx.fake_file_table.add_files(["qux"])
+        expect_edit_move(
+            self,
+            ["bar", "foo"],
+            "baz\nqux\n",
+            [],
+            test_ctx=test_ctx,
+            raises=edit_filenames.AbortError)
+
+    def test_edit_added_lines(self) -> None:
+        expect_edit_move(
+            self,
+            ["bar", "foo"],
+            "bar\nbaz\nfoo\n",
+            [],
+            raises=edit_filenames.AbortError)
+
+    def test_edit_removed_lines(self) -> None:
+        expect_edit_move(
+            self,
+            ["bar", "foo"],
+            "foo\n",
+            [],
+            raises=edit_filenames.AbortError)
 
     def test_edit_move_rotate_left(self) -> None:
         """Tests renaming files by rotating filenames left."""
         expect_edit_move(
+            self,
             ["foo.1", "foo.2", "foo.3", "foo.4"],
             "foo.2\nfoo.3\nfoo.4\nfoo.1\n",
             [
@@ -174,6 +234,7 @@ class TestEditFilenames(unittest.TestCase):
     def test_edit_move_rotate_right(self) -> None:
         """Tests renaming files by rotating filenames right."""
         expect_edit_move(
+            self,
             ["foo.1", "foo.2", "foo.3", "foo.4"],
             "foo.4\nfoo.1\nfoo.2\nfoo.3\n",
             [
