@@ -15,6 +15,11 @@ import edit_filenames
 
 
 class FakeFileTable:
+    """
+    Provides fake versions of common file system operations and tracks the
+    existence of faked files.
+    """
+
     existing_files: typing.Set[str]
     existing_directories: typing.Set[str]
 
@@ -23,16 +28,28 @@ class FakeFileTable:
         self.existing_directories = set()
 
     def add_files(self, paths: typing.Iterable[str]) -> None:
+        """
+        Adds files and their parent directories to the fake file system to
+        treat them as existing.
+        """
         paths = [os.path.abspath(path) for path in paths]
         self.existing_files.update(paths)
         self.add_directories((os.path.dirname(path) for path in paths))
 
     def remove_paths(self, paths: typing.Iterable[str]) -> None:
+        """
+        Removes the specified paths to files or to directories from the fake
+        file system so that they are no longer considered to exist.
+        """
         paths = [os.path.abspath(path) for path in paths]
         self.existing_files.difference_update(paths)
         self.existing_directories.difference_update(paths)
 
     def add_directories(self, paths: typing.Iterable[str]) -> None:
+        """
+        Adds the specified  directories to the fake file system to treat them
+        as existing.
+        """
         for path in paths:
             while True:
                 assert path not in self.existing_files
@@ -42,7 +59,8 @@ class FakeFileTable:
                 path = os.path.dirname(path)
 
     def mkdir(self, path: typing.Union[str, os.PathLike],
-              mode=511, *, dir_fd=None) -> None:
+              mode=511, *, dir_fd=None) -> None:  # pylint: disable=unused-argument
+        """Fake version of `os.mkdir`."""
         original_path = path
         path = os.path.abspath(path)
         if os.path.dirname(path) not in self.existing_directories:
@@ -51,7 +69,8 @@ class FakeFileTable:
         self.existing_directories.add(path)
 
     def stat(self, path: typing.Union[str, os.PathLike], *,
-             dir_fd=None, follow_symlinks=True) -> os.stat_result:
+             dir_fd=None, follow_symlinks=True) -> os.stat_result:  # pylint: disable=unused-argument
+        """Fake version of `os.stat`."""
         original_path = path
         path = os.path.abspath(path)
 
@@ -73,10 +92,13 @@ class FakeFileTable:
         return os.stat_result(tuple(result))
 
     def lstat(self, path: os.PathLike, *, dir_fd=None) -> os.stat_result:
+        """Fake version of `os.lstat`."""
         return self.stat(path, dir_fd=dir_fd, follow_symlinks=False)
 
 
 class TestContext:
+    """Context for storing test parameters and state."""
+
     original_filename_list: typing.List[str]
     new_filenames: str
     fake_file_table: FakeFileTable
@@ -91,12 +113,17 @@ _original_print = print
 
 
 def fake_print(*args, **kwargs) -> None:
+    """
+    Fake version of `print` that swallows output to `sys.stdout` and to
+    `sys.stderr`.
+    """
     file = kwargs.get('file')
     if file is not None and file != sys.stdout and file != sys.stderr:
         _original_print(*args, **kwargs)
 
 
 def fake_move(test_ctx: TestContext) -> typing.Callable:
+    """Returns a fake version of `shutil.move`."""
     def helper(source_path: str, destination_path: str) -> None:
         if not os.path.exists(source_path):
             raise OSError(errno.ENOENT, "No such file or directory", source_path)
@@ -113,6 +140,7 @@ def fake_move(test_ctx: TestContext) -> typing.Callable:
 
 
 def fake_run_editor(mock_contents: str) -> typing.Callable:
+    """Returns a fake version of `edit_filenames.run_editor`."""
     def run_editor(file_path: str, **_kwargs) -> None:
         with open(file_path, "w") as file:
             print(mock_contents, file=file, end="")
@@ -125,6 +153,10 @@ def expect_edit_move(test_case: unittest.TestCase,
                      expected_calls: typing.List,
                      test_ctx: TestContext = None,
                      raises: typing.Any = None) -> None:
+    """
+    Verifies the behavior of `edit_filenames.edit_move`, setting up necessary
+    mocks.
+    """
     test_ctx = test_ctx or TestContext()
     test_ctx.original_filename_list = original_filename_list
     test_ctx.new_filenames = new_filenames
@@ -207,6 +239,7 @@ class TestEditFilenames(unittest.TestCase):
             raises=edit_filenames.AbortError)
 
     def test_makes_directories(self) -> None:
+        """Tests that destination directories are automatically created."""
         original_filename_list = ["bar", "foo"]
         new_filenames = "dir1/bar\ndir2/dir3/dir4/foo\n"
         expected_calls = [
@@ -223,15 +256,8 @@ class TestEditFilenames(unittest.TestCase):
                          new_filenames,
                          expected_calls)
 
-    def test_edit_move_duplicate_destination(self) -> None:
-        expect_edit_move(
-            self,
-            ["bar", "foo"],
-            "baz\nbaz\n",
-            [],
-            raises=edit_filenames.AbortError)
-
     def test_edit_move_existing_destination(self) -> None:
+        """Tests that renames fail if the destination already exists."""
         test_ctx = TestContext()
         test_ctx.fake_file_table.add_files(["qux"])
         expect_edit_move(
@@ -242,7 +268,20 @@ class TestEditFilenames(unittest.TestCase):
             test_ctx=test_ctx,
             raises=edit_filenames.AbortError)
 
+    def test_edit_move_duplicate_destination(self) -> None:
+        """
+        Tests that renames fail if multiple files are renamed to the same
+        destination.
+        """
+        expect_edit_move(
+            self,
+            ["bar", "foo"],
+            "baz\nbaz\n",
+            [],
+            raises=edit_filenames.AbortError)
+
     def test_edit_added_lines(self) -> None:
+        """Tests that renames fail if lines were added in the editor."""
         expect_edit_move(
             self,
             ["bar", "foo"],
@@ -251,6 +290,7 @@ class TestEditFilenames(unittest.TestCase):
             raises=edit_filenames.AbortError)
 
     def test_edit_removed_lines(self) -> None:
+        """Tests that renames fail if lines were removed in the editor."""
         expect_edit_move(
             self,
             ["bar", "foo"],
