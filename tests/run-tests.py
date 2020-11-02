@@ -4,6 +4,7 @@
 
 import errno
 import os
+import pathlib
 import stat
 import sys
 import typing
@@ -40,17 +41,32 @@ class FakeFileTable:
                 self.existing_directories.add(path)
                 path = os.path.dirname(path)
 
-    def stat(self, path: os.PathLike, *,
+    def mkdir(self, path: typing.Union[str, os.PathLike],
+              mode=511, *, dir_fd=None) -> None:
+        original_path = path
+        path = os.path.abspath(path)
+        if os.path.dirname(path) not in self.existing_directories:
+            raise OSError(errno.ENOENT, "No such file or directory",
+                          original_path)
+        self.existing_directories.add(path)
+
+    def stat(self, path: typing.Union[str, os.PathLike], *,
              dir_fd=None, follow_symlinks=True) -> os.stat_result:
+        original_path = path
         path = os.path.abspath(path)
 
-        result = [0 for i in range(10)]
+        parent = os.path.dirname(path)
+        if parent != path and not os.path.isdir(parent):
+            raise OSError(errno.ENOENT, "No such file or directory", path)
+
+        result = [0] * 10
         if path in self.existing_files:
             result[stat.ST_MODE] = stat.S_IFREG
         elif path in self.existing_directories:
             result[stat.ST_MODE] = stat.S_IFDIR
         else:
-            raise OSError(errno.ENOENT, "No such file or directory", path)
+            raise OSError(errno.ENOENT, "No such file or directory",
+                          original_path)
 
         result[stat.ST_MODE] |= stat.S_IRUSR | stat.S_IWUSR
 
@@ -83,10 +99,11 @@ def fake_print(*args, **kwargs) -> None:
 def fake_move(test_ctx: TestContext) -> typing.Callable:
     def helper(source_path: str, destination_path: str) -> None:
         if not os.path.exists(source_path):
-            raise OSError(errno.ENOENT, f"{source_path} not found.", source_path)
-        if os.path.exists(destination_path):
-            raise OSError(errno.EEXIST, f"{destination_path} already exists",
-                          destination_path)
+            raise OSError(errno.ENOENT, "No such file or directory", source_path)
+
+        if not os.path.isdir(os.path.dirname(destination_path)):
+            raise OSError(errno.ENOENT, "No such file or directory", destination_path)
+
         if os.path.isdir(source_path):
             test_ctx.fake_file_table.add_directories([destination_path])
         else:
@@ -105,7 +122,7 @@ def fake_run_editor(mock_contents: str) -> typing.Callable:
 def expect_edit_move(test_case: unittest.TestCase,
                      original_filename_list: typing.List[str],
                      new_filenames: str,
-                     expected_move_calls: typing.List,
+                     expected_calls: typing.List,
                      test_ctx: TestContext = None,
                      raises: typing.Any = None) -> None:
     test_ctx = test_ctx or TestContext()
@@ -119,14 +136,21 @@ def expect_edit_move(test_case: unittest.TestCase,
          unittest.mock.patch("builtins.print", fake_print), \
          unittest.mock.patch("edit_filenames.run_editor",
                              fake_run_editor(test_ctx.new_filenames)), \
+         unittest.mock.patch("os.mkdir",
+                             side_effect=test_ctx.fake_file_table.mkdir,
+                             autospec=True) as mock_mkdir, \
          unittest.mock.patch("shutil.move",
                              side_effect=fake_move(test_ctx),
                              autospec=True) as mock_move:
 
+        mock_manager = unittest.mock.Mock()
+        mock_manager.attach_mock(mock_mkdir, "mkdir")
+        mock_manager.attach_mock(mock_move, "move")
+
         try:
             edit_filenames.edit_move(test_ctx.original_filename_list,
                                      interactive=False)
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-except
             if raises:
                 test_case.assertIsInstance(e, raises)
                 for filename in original_filename_list:
@@ -134,7 +158,7 @@ def expect_edit_move(test_case: unittest.TestCase,
             else:
                 raise
 
-        mock_move.assert_has_calls(expected_move_calls)
+        mock_manager.assert_has_calls(expected_calls)
 
 
 class TestEditFilenames(unittest.TestCase):
@@ -144,10 +168,10 @@ class TestEditFilenames(unittest.TestCase):
         original_filename_list = ["bar", "baz", "foo", "qux"]
         new_filenames = "bar.ext\nbaz.ext\nfoo.ext\nqux.ext\n"
         expected_calls = [
-            unittest.mock.call("bar", "bar.ext"),
-            unittest.mock.call("baz", "baz.ext"),
-            unittest.mock.call("foo", "foo.ext"),
-            unittest.mock.call("qux", "qux.ext")
+            unittest.mock.call.move("bar", "bar.ext"),
+            unittest.mock.call.move("baz", "baz.ext"),
+            unittest.mock.call.move("foo", "foo.ext"),
+            unittest.mock.call.move("qux", "qux.ext")
         ]
 
         expect_edit_move(self,
@@ -181,6 +205,23 @@ class TestEditFilenames(unittest.TestCase):
             "bar\nbaz\nfoo\n",
             [],
             raises=edit_filenames.AbortError)
+
+    def test_makes_directories(self) -> None:
+        original_filename_list = ["bar", "foo"]
+        new_filenames = "dir1/bar\ndir2/dir3/dir4/foo\n"
+        expected_calls = [
+            unittest.mock.call.mkdir(pathlib.Path("dir1")),
+            unittest.mock.call.move("bar", "dir1/bar"),
+            unittest.mock.call.mkdir(pathlib.Path("dir2")),
+            unittest.mock.call.mkdir(pathlib.Path("dir2/dir3")),
+            unittest.mock.call.mkdir(pathlib.Path("dir2/dir3/dir4")),
+            unittest.mock.call.move("foo", "dir2/dir3/dir4/foo"),
+        ]
+
+        expect_edit_move(self,
+                         original_filename_list,
+                         new_filenames,
+                         expected_calls)
 
     def test_edit_move_duplicate_destination(self) -> None:
         expect_edit_move(
@@ -224,11 +265,11 @@ class TestEditFilenames(unittest.TestCase):
             ["foo.1", "foo.2", "foo.3", "foo.4"],
             "foo.2\nfoo.3\nfoo.4\nfoo.1\n",
             [
-                unittest.mock.call("foo.4", "edit_filenames-0.tmp"),
-                unittest.mock.call("foo.3", "foo.4"),
-                unittest.mock.call("foo.2", "foo.3"),
-                unittest.mock.call("foo.1", "foo.2"),
-                unittest.mock.call("edit_filenames-0.tmp", "foo.1"),
+                unittest.mock.call.move("foo.4", "edit_filenames-0.tmp"),
+                unittest.mock.call.move("foo.3", "foo.4"),
+                unittest.mock.call.move("foo.2", "foo.3"),
+                unittest.mock.call.move("foo.1", "foo.2"),
+                unittest.mock.call.move("edit_filenames-0.tmp", "foo.1"),
             ])
 
     def test_edit_move_rotate_right(self) -> None:
@@ -238,11 +279,11 @@ class TestEditFilenames(unittest.TestCase):
             ["foo.1", "foo.2", "foo.3", "foo.4"],
             "foo.4\nfoo.1\nfoo.2\nfoo.3\n",
             [
-                unittest.mock.call("foo.2", "edit_filenames-0.tmp"),
-                unittest.mock.call("foo.3", "foo.2"),
-                unittest.mock.call("foo.4", "foo.3"),
-                unittest.mock.call("foo.1", "foo.4"),
-                unittest.mock.call("edit_filenames-0.tmp", "foo.1"),
+                unittest.mock.call.move("foo.2", "edit_filenames-0.tmp"),
+                unittest.mock.call.move("foo.3", "foo.2"),
+                unittest.mock.call.move("foo.4", "foo.3"),
+                unittest.mock.call.move("foo.1", "foo.4"),
+                unittest.mock.call.move("edit_filenames-0.tmp", "foo.1"),
             ])
 
 
