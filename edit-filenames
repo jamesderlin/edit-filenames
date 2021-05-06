@@ -33,7 +33,6 @@ import errno
 import getopt
 import os
 import pathlib
-import readline  # pylint: disable=unused-import  # noqa: F401  # Imported for side-effect.
 import shlex
 import shutil
 import string
@@ -165,7 +164,7 @@ def run_editor(file_path: str, *,
     if use_posix_style and file_path.startswith("-") and "--" not in options:
         options.append("--")
 
-    subprocess.run((editor, *options, file_path), check=True)
+    subprocess.run((editor, *options, file_path), stdin=sys.stdin, check=True)
 
 
 def extract_file_paths(lines: typing.List[str]) -> typing.List[str]:
@@ -757,10 +756,28 @@ def main(argv: typing.List[str]) -> int:
         usage(file=sys.stderr)
         return 1
 
-    edit_move(args,
-              editor=editor,
-              interactive=interactive,
-              use_absolute_paths=use_absolute_paths)
+    old_stdin = sys.stdin
+    new_stdin: typing.TextIO = None
+    if interactive:
+        try:
+            import readline  # pylint: disable=unused-import,import-outside-toplevel  # noqa: F401  # Imported for side-effect.
+        except ModuleNotFoundError:
+            pass
+
+        # Force sys.stdin to be an interactive terminal (tty) in interactive mode.
+        new_stdin = os.fdopen(1)
+        sys.stdin = new_stdin
+
+    try:
+        edit_move(args,
+                  editor=editor,
+                  interactive=interactive,
+                  use_absolute_paths=use_absolute_paths)
+    finally:
+        sys.stdin = old_stdin
+        if new_stdin:
+            new_stdin.close()
+
     return 0
 
 
