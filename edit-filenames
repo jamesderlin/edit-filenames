@@ -138,7 +138,7 @@ def run_editor(file_path: str, *,
     editor = editor or os.environ.get("VISUAL") or os.environ.get("EDITOR")
 
     if editor:
-        (editor, *options) = shlex.split(editor, posix=(os.name == 'posix'))
+        (editor, *options) = shlex.split(editor, posix=(os.name == "posix"))
 
     if not editor:
         if os.name == "posix":
@@ -700,8 +700,8 @@ Options:
         Disables all confirmation prompts and disables showing instructions in
         the editor.  Useful for automated editing.
 
-        In non-interactive mode, automatically undoes any changes and aborts
-        when encountering any failure.
+        In non-interactive mode, any failure will automatically undo any changes
+        and abort.
 """
 
 
@@ -715,7 +715,7 @@ def usage(*, full: bool = False, file: typing.TextIO = sys.stdout) -> None:
         print(f"\n"
               f"{__doc__.strip()}\n"
               f"\n"
-              f"{_usage_text}\n",
+              f"{_usage_text.strip()}\n",
               file=file,
               end="")
 
