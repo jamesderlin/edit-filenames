@@ -152,7 +152,7 @@ def run_editor(file_path: str, *,
 
     if line_number:
         editor_name = pathlib.Path(os.path.basename(editor)).stem
-        if editor_name in ("sublime_text", "code", "atom"):
+        if editor_name in ("sublime_text", "subl", "code", "atom"):
             if editor_name == "code":
                 options.append("--goto")
             file_path = f"{file_path}:{line_number}"
