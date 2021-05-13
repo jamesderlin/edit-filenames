@@ -21,21 +21,21 @@ below.
   directory:
 
     ```shell
-    $ edit-filenames -e "code --wait" *
+    $ edit-filenames -e "code --wait" ./*
     ```
 
 * To use `sed` to replace "apples" with "bananas" for all filenames in the
   current directory:
 
     ```shell
-    $ edit-filenames -e "sed -i s/apples/bananas/" --non-interactive *
+    $ edit-filenames -e "sed -i s/apples/bananas/" --non-interactive ./*
     ```
 
 * To add a `.png` extension to all files in the current directory that are
   identified as PNG images:
 
     ```shell
-    $ file --mime-type * | grep image/png | cut -d : -f 1 \
+    $ file --mime-type ./* | grep image/png | cut -d : -f 1 \
       | xargs edit-filenames -e "sed -i s/$/.png/" --non-interactive
     ```
 
