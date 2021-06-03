@@ -139,12 +139,11 @@ def fake_move(test_ctx: TestContext) -> typing.Callable:
     return helper
 
 
-def fake_run_editor(mock_contents: str) -> typing.Callable:
-    """Returns a fake version of `edit_filenames.run_editor`."""
-    def run_editor(file_path: str, **_kwargs) -> None:
-        with open(file_path, "w") as file:
-            print(mock_contents, file=file, end="")
-    return run_editor
+def fake_edit_temporary(mock_contents: str) -> typing.Callable:
+    """Returns a fake version of `spawneditor.edit_file`."""
+    def edit_temporary(*_args, **_kwargs) -> typing.Iterator[str]:
+        yield from mock_contents.splitlines(keepends=True)
+    return edit_temporary
 
 
 def expect_edit_move(test_case: unittest.TestCase,
@@ -166,8 +165,8 @@ def expect_edit_move(test_case: unittest.TestCase,
     with unittest.mock.patch("os.stat", test_ctx.fake_file_table.stat), \
          unittest.mock.patch("os.lstat", test_ctx.fake_file_table.lstat), \
          unittest.mock.patch("builtins.print", fake_print), \
-         unittest.mock.patch("edit_filenames.run_editor",
-                             fake_run_editor(test_ctx.new_filenames)), \
+         unittest.mock.patch("spawneditor.edit_temporary",
+                             fake_edit_temporary(test_ctx.new_filenames)), \
          unittest.mock.patch("os.mkdir",
                              side_effect=test_ctx.fake_file_table.mkdir,
                              autospec=True) as mock_mkdir, \

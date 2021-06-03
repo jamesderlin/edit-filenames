@@ -1,0 +1,3 @@
+[submodule "spawneditor"]
+	path = spawneditor
+	url = git@github.com:jamesderlin/python-spawneditor.git

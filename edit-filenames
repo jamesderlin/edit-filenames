@@ -28,18 +28,18 @@ for examples.
 """
 
 import collections
-import contextlib
 import errno
 import getopt
+import itertools
 import os
 import pathlib
-import shlex
 import shutil
 import string
 import subprocess
 import sys
-import tempfile
 import typing
+
+import spawneditor
 
 
 class AbortError(Exception):
@@ -115,58 +115,6 @@ def prompt(message: str, choices: typing.Iterable[str], *,
             print(f"Ambiguous choice: {response[1]}", file=sys.stderr)
 
 
-def run_editor(file_path: str, *,
-               line_number: typing.Optional[int] = None,
-               editor: typing.Optional[str] = None) -> None:
-    """
-    Open the specified file in an editor at the specified line number, if
-    provided.
-
-    The launched editor will be chosen from, in order:
-
-    1. The explicitly specified editor.
-    2. The `VISUAL` environment variable.
-    3. The `EDITOR` environment variable.
-    4. Hard-coded paths to common editors.
-
-    Raises an `AbortError` if an editor cannot be determined.
-    """
-    options: typing.List[str] = []
-    use_posix_style = True
-
-    editor = editor or os.environ.get("VISUAL") or os.environ.get("EDITOR")
-
-    if editor:
-        (editor, *options) = shlex.split(editor, posix=(os.name == "posix"))
-
-    if not editor:
-        if os.name == "posix":
-            editor = str(pathlib.Path("/usr/bin/editor").resolve()) or "vi"
-        elif os.name == "nt":
-            editor = "notepad.exe"
-            line_number = None
-            use_posix_style = False
-        else:
-            raise AbortError("Unable to determine what text editor to use.  "
-                             "Set the EDITOR environment variable.")
-
-    if line_number:
-        editor_name = pathlib.Path(os.path.basename(editor)).stem
-        if editor_name in ("sublime_text", "subl", "code", "atom"):
-            if editor_name == "code":
-                options.append("--goto")
-            file_path = f"{file_path}:{line_number}"
-        elif editor_name in ("vi", "vim", "emacs", "xemacs", "nano", "pico",
-                             "gedit"):
-            options.append(f"+{line_number}")
-        elif editor_name in ("notepad++",):
-            options.append(f"-n{line_number}")
-    if use_posix_style and file_path.startswith("-") and "--" not in options:
-        options.append("--")
-
-    subprocess.run((editor, *options, file_path), stdin=sys.stdin, check=True)
-
-
 def extract_file_paths(lines: typing.List[str]) -> typing.List[str]:
     """Parses and returns the list of file paths from the edited file."""
     # Ignore trailing blank lines.
@@ -193,8 +141,7 @@ def edit_paths(paths: typing.Iterable[str], *,
     """
     Opens the list of paths in the editor and returns the edited paths.
 
-    If no editor is specified, one will be determined automatically. (See
-    `run_editor`.)
+    If no editor is specified, one will be determined automatically.
 
     Raises an `AbortError` if we fail to execute the editor.
     """
@@ -211,29 +158,20 @@ def edit_paths(paths: typing.Iterable[str], *,
         "",
     ]
 
-    with contextlib.ExitStack() as exitStack:
-        file = tempfile.NamedTemporaryFile(mode="w", prefix=f"{__name__}-",
-                                           delete=False, encoding="utf8")
-        exitStack.callback(lambda: os.remove(file.name))
+    try:
+        edited_file \
+            = spawneditor.edit_temporary(itertools.chain(instructions, paths),
+                                         temporary_prefix=f"{__name__}-",
+                                         line_number=len(instructions) + 1,
+                                         editor=editor,
+                                         stdin=sys.stdin)
+    except subprocess.CalledProcessError as e:
+        raise AbortError(f"Failed to execute editor: {e.cmd}",
+                         exit_code=e.returncode) from e
+    except spawneditor.UnsupportedPlatformError as e:
+        raise AbortError(str(e)) from e
 
-        for line in instructions:
-            print(line, file=file)
-
-        for path in paths:
-            print(path, file=file)
-        file.close()
-
-        try:
-            run_editor(file.name, line_number=len(instructions) + 1,
-                       editor=editor)
-        except subprocess.CalledProcessError as e:
-            raise AbortError(f"Failed to execute editor: {e.cmd}",
-                             exit_code=e.returncode) from e
-
-        with open(file.name, "r", encoding="utf8") as f:
-            edited_paths = extract_file_paths(f.readlines())
-
-    return edited_paths
+    return extract_file_paths(list(edited_file))
 
 
 def sanitized_path(s: str) -> str:
@@ -764,7 +702,8 @@ def main(argv: typing.List[str]) -> int:
         except ModuleNotFoundError:
             pass
 
-        # Force sys.stdin to be an interactive terminal (tty) in interactive mode.
+        # Force sys.stdin to be an interactive terminal (tty) in interactive
+        # mode.
         new_stdin = os.fdopen(1)
         sys.stdin = new_stdin
 
