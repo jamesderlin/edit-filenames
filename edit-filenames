@@ -591,7 +591,7 @@ def apply_moves(ctx: EditMoveContext) -> None:
 
 
 def edit_move(original_paths: typing.List[str], *,
-              editor: str = None,
+              editor: typing.Optional[str] = None,
               interactive=True,
               use_absolute_paths=False) -> None:
     """
@@ -757,7 +757,7 @@ def main(argv: typing.List[str]) -> int:
         return 1
 
     old_stdin = sys.stdin
-    new_stdin: typing.TextIO = None
+    new_stdin: typing.Optional[typing.TextIO] = None
     if interactive:
         try:
             import readline  # pylint: disable=unused-import,import-outside-toplevel  # noqa: F401  # Imported for side-effect.
