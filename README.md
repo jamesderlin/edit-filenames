@@ -15,28 +15,40 @@ command-line options to spawn independent instances.  This is necessary for
 `edit-filenames` to determine when the edited file is closed.  See the examples
 below.
 
+
+## Installation
+
+`edit-filenames` depends on submodules, so `--recurse-submodules` is necessary
+when using `git clone`:
+```shell
+git clone --recurse-submodules https://github.com/jamesderlin/edit-filenames.git
+```
+
+
 ## Examples
 
 * To use Visual Studio Code (`code`) to rename all files in the current
   directory:
 
     ```shell
-    $ edit-filenames -e "code --wait" ./*
+    edit-filenames -e "code --wait" ./*
     ```
 
 * To use `sed` to replace "apples" with "bananas" for all filenames in the
   current directory:
 
     ```shell
-    $ edit-filenames -e "sed -i s/apples/bananas/" --non-interactive ./*
+    edit-filenames -e "sed -i s/apples/bananas/" --non-interactive ./*
     ```
 
 * To add a `.png` extension to all files in the current directory that are
   identified as PNG images:
 
     ```shell
-    $ file --mime-type ./* | grep image/png | cut -d : -f 1 \
-      | xargs edit-filenames -e "sed -i s/$/.png/" --non-interactive
+    file --mime-type ./* | grep image/png | cut -d : -f 1 \
+    | xargs edit-filenames -e "sed -i s/$/.png/" --non-interactive
     ```
 
-Copyright © 2020 James D. Lin.
+---
+
+Copyright © 2020-2021 James D. Lin.
