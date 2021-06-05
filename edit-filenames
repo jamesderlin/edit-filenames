@@ -635,7 +635,7 @@ Options:
     --absolute
         Use absolute file paths.
 
-    --non-interactives
+    --non-interactive
         Disables all confirmation prompts and disables showing instructions in
         the editor.  Useful for automated editing.
 

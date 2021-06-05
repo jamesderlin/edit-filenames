@@ -38,15 +38,16 @@ git clone --recurse-submodules https://github.com/jamesderlin/edit-filenames.git
   current directory:
 
     ```shell
-    edit-filenames -e "sed -i s/apples/bananas/" --non-interactive ./*
+    edit-filenames -e "sed -i s/apples/bananas/" ./*
     ```
 
 * To add a `.png` extension to all files in the current directory that are
-  identified as PNG images:
+  identified as PNG images (and that don't already have a `.png` extension):
 
     ```shell
-    file --mime-type ./* | grep image/png | cut -d : -f 1 \
-    | xargs edit-filenames -e "sed -i s/$/.png/" --non-interactive
+    file --mime-type ./* | grep image/png | grep --invert-match .png \
+    | cut -d : -f 1 \
+    | xargs edit-filenames -e "sed -i s/$/.png/"
     ```
 
 ---
