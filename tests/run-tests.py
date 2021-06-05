@@ -14,6 +14,13 @@ import unittest.mock
 import edit_filenames
 
 
+# Mocked autospec functions are buggy in some versions of Python:
+# <https://stackoverflow.com/q/56367526/>
+if sys.version_info < (3, 7, 5) or (3, 8) < sys.version_info < (3, 8, 2):
+    print("Python 3.8.2 or later is required.", file=sys.stderr)
+    sys.exit(1)
+
+
 class FakeFileTable:
     """
     Provides fake versions of common file system operations and tracks the
