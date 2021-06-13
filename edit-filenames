@@ -164,7 +164,9 @@ def extract_file_paths(lines: typing.List[str]) -> typing.List[str]:
     else:
         last_line = 0
 
-    # Ignore instructions.
+    # Ignore instructions.  To be robust in case the user removes or edits
+    # lines from the instructions, assume that the last, non-trailing blank
+    # line separates the instructions from the actual content.
     for first_line in reversed(range(last_line)):
         if not lines[first_line].strip():
             first_line += 1
@@ -173,6 +175,19 @@ def extract_file_paths(lines: typing.List[str]) -> typing.List[str]:
         first_line = 0
 
     return [lines[i].rstrip("\n") for i in range(first_line, last_line + 1)]
+
+
+_instructions = """\
+**********************************************************************
+* INSTRUCTIONS:
+*
+* Edit file paths below to move or rename the corresponding files.
+*
+* Do NOT add or remove any lines.
+*
+**********************************************************************
+"""
+assert _instructions.endswith("\n")
 
 
 def edit_paths(paths: typing.Iterable[str], *,
@@ -185,26 +200,17 @@ def edit_paths(paths: typing.Iterable[str], *,
 
     Raises an `AbortError` if we fail to execute the editor.
     """
-    horizontal_rule = "*" * 70
-    instructions = [] if not show_instructions else [
-        horizontal_rule,
-        "* INSTRUCTIONS:",
-        "*",
-        "* Edit file paths below to move or rename the corresponding files.",
-        "*",
-        "* Do NOT add or remove any lines.",
-        "*",
-        horizontal_rule,
-        "",
-    ]
-
+    instructions = [] if not show_instructions else [_instructions]
     try:
-        edited_file \
-            = spawneditor.edit_temporary(itertools.chain(instructions, paths),
-                                         temporary_prefix=f"{__name__}-",
-                                         line_number=len(instructions) + 1,
-                                         editor=editor,
-                                         stdin=sys.stdin)
+        edited_file = spawneditor.edit_temporary(
+            itertools.chain(instructions, paths),
+            temporary_prefix=f"{__name__}-",
+            line_number=(len(instructions)
+                         + sum((s.count("\n") for s in instructions))
+                         + 1),
+            editor=editor,
+            stdin=sys.stdin,
+        )
     except subprocess.CalledProcessError as e:
         raise AbortError(f"Failed to execute editor: {e.cmd}",
                          exit_code=e.returncode) from e
