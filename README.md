@@ -1,6 +1,6 @@
 # edit-filenames
 
-Renames or moves files using a text editor.
+Renames or moves files (or directories) using a text editor.
 
 Allows paths to a large number of files to be edited using features of a text
 editor, such as search-and-replace or multi-cursor editing.

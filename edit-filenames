@@ -2,7 +2,7 @@
 
 # edit-filenames
 #
-# Copyright (C) 2020 James D. Lin <jameslin@cal.berkeley.edu>
+# Copyright (C) 2020-2021 James D. Lin <jameslin@cal.berkeley.edu>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,12 +18,12 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 """
-Renames or moves files using a text editor.
+Renames or moves files (or directories) using a text editor.
 
 Allows paths to a large number of files to be edited using features of a text
 editor, such as search-and-replace or multi-cursor editing.
 
-See <https://github.com/jamesderlin/edit-filenames> for more information an
+See <https://github.com/jamesderlin/edit-filenames> for more information and
 for examples.
 """
 

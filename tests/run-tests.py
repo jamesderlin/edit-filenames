@@ -3,6 +3,7 @@
 """Unit tests for edit-filenames."""
 
 import errno
+import itertools
 import os
 import pathlib
 import stat
@@ -331,6 +332,55 @@ class TestEditFilenames(unittest.TestCase):
                 unittest.mock.call.move("foo.1", "foo.4"),
                 unittest.mock.call.move("edit_filenames-0.tmp", "foo.1"),
             ])
+
+
+    def test_edit_paths_interactive(self) -> None:
+        """
+        Tests the behavior of `edit_filenames.edit_paths` in interactive mode.
+        """
+        input_paths = ["foo", "bar", "baz"]
+        with unittest.mock.patch("spawneditor.edit_temporary",
+                                 return_value=["foo\n", "bar\n", "qux\n"]) \
+                as mock_edit_temporary:
+            edited_paths = edit_filenames.edit_paths(input_paths,
+                                                     show_instructions=True)
+            mock_edit_temporary.assert_called_once()
+            content_lines = list(itertools.chain.from_iterable(
+                # We intentionally use `str.split("\n")` here because
+                # `str.splitlines()` will swallow a trailing newline.
+                (s.split("\n") for s in mock_edit_temporary.call_args.args[0])
+            ))
+            line_number = mock_edit_temporary.call_args.kwargs["line_number"]
+
+            self.assertTrue(1 < line_number)
+            self.assertTrue(line_number <= len(content_lines))
+            for i in range(line_number) :
+                if "instructions" in content_lines[i].lower():
+                    break
+            else:
+                self.fail("No instructions found")
+            self.assertEqual(content_lines[line_number - 1:], input_paths)
+            self.assertEqual(edited_paths, ["foo", "bar", "qux"])
+
+
+    def test_edit_paths_noninteractive(self) -> None:
+        """
+        Tests the behavior of `edit_filenames.edit_paths` in non-interactive
+        mode.
+        """
+        with unittest.mock.patch("spawneditor.edit_temporary",
+                                 return_value=["foo\n", "bar\n", "qux\n"]) \
+                as mock_edit_temporary:
+            input_paths = ["foo", "bar", "baz"]
+            edited_paths = edit_filenames.edit_paths(input_paths,
+                                                     show_instructions=False)
+            mock_edit_temporary.assert_called_once()
+            content_lines = list(mock_edit_temporary.call_args.args[0])
+            line_number = mock_edit_temporary.call_args.kwargs["line_number"]
+
+            self.assertTrue(line_number is None or line_number == 1)
+            self.assertEqual(content_lines, input_paths)
+            self.assertEqual(edited_paths, ["foo", "bar", "qux"])
 
 
 if __name__ == "__main__":
