@@ -32,6 +32,10 @@ when using `git clone`:
 git clone --recurse-submodules https://github.com/jamesderlin/edit-filenames.git
 ```
 
+Setting `git config submodule.recurse true` is also recommended so that
+submodules are automatically and appropriately updated when the parent
+repository is updated.
+
 
 ## Examples
 
@@ -39,7 +43,8 @@ git clone --recurse-submodules https://github.com/jamesderlin/edit-filenames.git
   directory:
 
     ```shell
-    edit-filenames -e "code --wait" ./*
+    export EDITOR="code --wait"
+    edit-filenames ./*
     ```
 
 * To use `sed` to replace "apples" with "bananas" for all filenames in the
