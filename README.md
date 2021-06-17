@@ -16,6 +16,14 @@ command-line options to spawn independent instances.  This is necessary for
 below.
 
 
+## Demo
+
+[![edit-filenames demo video on YouTube][edit-filenames-demo-thumbnail]][edit-filenames-demo-video]
+
+[edit-filenames-demo-thumbnail]: https://user-images.githubusercontent.com/17391434/122344256-73cf2300-cefb-11eb-86a6-afc0bdad958b.png
+[edit-filenames-demo-video]: https://www.youtube.com/watch?v=PtNb_VgfMyE
+
+
 ## Installation
 
 `edit-filenames` depends on submodules, so `--recurse-submodules` is necessary
