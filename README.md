@@ -64,6 +64,16 @@ repository is updated.
     | edit-filenames -e "sed -i s/$/.png/" -
     ```
 
+
+## Alternatives
+
+* `vidir` from [moreutils](https://joeyh.name/code/moreutils/) is a similar
+  program that can rename files using the default editor.  It additionally is
+  capable of deleting files and directories.
+
+* Instead of using `sed`, Perl includes a `rename` tool that can rename files
+  using regular expressions.
+
 ---
 
 Copyright © 2020-2021 James D. Lin.
