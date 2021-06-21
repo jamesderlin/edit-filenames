@@ -28,6 +28,7 @@ below.
 
 `edit-filenames` depends on submodules, so `--recurse-submodules` is necessary
 when using `git clone`:
+
 ```shell
 git clone --recurse-submodules https://github.com/jamesderlin/edit-filenames.git
 ```
@@ -60,7 +61,7 @@ repository is updated.
     ```shell
     file --mime-type ./* | grep image/png | grep --invert-match .png \
     | cut -d : -f 1 \
-    | xargs edit-filenames -e "sed -i s/$/.png/"
+    | edit-filenames -e "sed -i s/$/.png/" -
     ```
 
 ---

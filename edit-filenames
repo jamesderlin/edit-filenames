@@ -22,9 +22,6 @@ Renames or moves files (or directories) using a text editor.
 
 Allows paths to a large number of files to be edited using features of a text
 editor, such as search-and-replace or multi-cursor editing.
-
-See <https://github.com/jamesderlin/edit-filenames> for more information and
-for examples.
 """
 
 import collections
@@ -672,6 +669,11 @@ def edit_move(original_paths: typing.List[str], *,
 
 
 _usage_text = """
+FILE may be `-` to read filenames from stdin, one per line.
+
+See <https://github.com/jamesderlin/edit-filenames> for more information and
+for examples.
+
 Options:
     -e EDITOR, --editor=EDITOR
         The path to the editor to use, along with any desired command-line
@@ -735,6 +737,12 @@ def main(argv: typing.List[str]) -> int:
             interactive = True
         elif o == "--non-interactive":
             interactive = False
+
+    for i in range(len(args)):
+        if args[i] == "-":
+            args = (args[:i]
+                    + [line.rstrip("\n") for line in sys.stdin]
+                    + args[(i + 1):])
 
     if not args:
         usage(file=sys.stderr)
