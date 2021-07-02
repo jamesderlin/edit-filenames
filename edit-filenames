@@ -36,6 +36,7 @@ import subprocess
 import sys
 import typing
 
+import python_cli_utils.choices_prompt
 import spawneditor
 
 
@@ -65,91 +66,19 @@ class RestartEdit(Exception):
         self.paths_to_edit = paths_to_edit
 
 
-def flush_input():
-    """Clears pending input from `sys.stdin`."""
-    internal_helper = getattr(flush_input, "internal_helper", None)
-    if internal_helper is not None:
-        internal_helper()
-        return
-
-    import importlib  # pylint: disable=import-outside-toplevel
-
-    # For POSIX systems.
-    try:
-        termios = importlib.import_module("termios")
-    except ModuleNotFoundError:
-        pass
-    else:
-        def _internal_helper():
-            termios.tcflush(sys.stdin, termios.TCIOFLUSH)
-
-        flush_input.internal_helper = _internal_helper
-        _internal_helper()
-        return
-
-    # For Windows systems.
-    try:
-        msvcrt = importlib.import_module("msvcrt")
-    except ModuleNotFoundError:
-        pass
-    else:
-        def _internal_helper():
-            while msvcrt.kbhit():
-                msvcrt.getch()
-
-        flush_input.internal_helper = _internal_helper
-        _internal_helper()
-        return
-
-
 def prompt(message: str, choices: typing.Iterable[str], *,
            default: typing.Optional[str] = None) -> str:
     """
-    Prompts the user to choose from a list of choices.  Accepts any user input
-    that unambiguously matches the start of one of the choices.  Matches are
-    case-insensitive.
-
-    Returns the selected choice.
+    Wrapper around `python_cli_utils.choices_prompt.choices_prompt`.
 
     Raises an `AbortError` if the user cancels the prompt by sending EOF.
     """
-    assert choices
-    assert not default or default in choices
-    normalized_choices = [(choice.strip().lower(), choice)
-                          for choice in choices]
-    del choices
-
-    while True:
-        try:
-            # Answering prompts with aleady-buffered input (particularly with
-            # empty lines) is potentially dangerous, so disallow it.
-            flush_input()
-            raw_response = input(message)
-            response = (raw_response.strip().lower(), raw_response)
-            del raw_response
-        except EOFError:
-            print()
-            raise AbortError(cancelled=True) from None
-
-        if not response[0]:
-            if default:
-                return default
-            continue
-
-        if response[0] == "?":
-            continue
-
-        selected_choices: typing.List[typing.Tuple[str, str]] = []
-        for choice in normalized_choices:
-            if choice[0].startswith(response[0]):
-                selected_choices.append(choice)
-
-        if not selected_choices:
-            print(f"Invalid choice: {response[1]}", file=sys.stderr)
-        elif len(selected_choices) == 1:
-            return selected_choices[0][1]
-        else:
-            print(f"Ambiguous choice: {response[1]}", file=sys.stderr)
+    try:
+        return python_cli_utils.choices_prompt.choices_prompt(message=message,
+                                                              choices=choices,
+                                                              default=default)
+    except EOFError:
+        raise AbortError(cancelled=True) from None
 
 
 def extract_file_paths(lines: typing.List[str]) -> typing.List[str]:
@@ -738,7 +667,7 @@ def main(argv: typing.List[str]) -> int:
         elif o == "--non-interactive":
             interactive = False
 
-    for i in range(len(args)):
+    for i in range(len(args)):  # pylint: disable=consider-using-enumerate
         if args[i] == "-":
             args = (args[:i]
                     + [line.rstrip("\n") for line in sys.stdin]
