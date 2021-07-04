@@ -66,7 +66,7 @@ class RestartEdit(Exception):
         self.paths_to_edit = paths_to_edit
 
 
-def prompt(message: str, choices: typing.Iterable[str], *,
+def prompt(message: str, choices: typing.Collection[str], *,
            default: typing.Optional[str] = None) -> str:
     """
     Wrapper around `python_cli_utils.choices_prompt.choices_prompt`.
@@ -118,7 +118,7 @@ assert _instructions.endswith("\n")
 
 def edit_paths(paths: typing.Iterable[str], *,
                editor: typing.Optional[str] = None,
-               show_instructions=True) -> typing.List[str]:
+               show_instructions: bool = True) -> typing.List[str]:
     """
     Opens the list of paths in the editor and returns the edited paths.
 
@@ -166,16 +166,19 @@ def sanitized_path(s: str) -> str:
 
 
 def move_file(source_path: pathlib.Path, destination_path: pathlib.Path) \
-        -> typing.List[typing.Callable[[], typing.Any]]:
+        -> typing.List[typing.Callable[[], None]]:
     """
     Moves the specified file from `source_path` to `destination_path`.
+
+    Returns a list of zero-argument callbacks that can be invoked to undo all
+    performed actions.
 
     Raises an `OSError` on failure.
     """
     def undo_mkdir(path: pathlib.Path) -> typing.Callable[[], None]:
         return lambda: os.rmdir(path)
 
-    undo_stack: typing.List[typing.Callable[[], typing.Any]] = []
+    undo_stack: typing.List[typing.Callable[[], None]] = []
 
     parts = destination_path.parent.parts
     ancestor_path = pathlib.Path()
@@ -502,8 +505,8 @@ def apply_moves(ctx: EditMoveContext) -> None:
 
 def edit_move(original_paths: typing.List[str], *,
               editor: typing.Optional[str] = None,
-              interactive=True,
-              use_absolute_paths=False) -> None:
+              interactive: bool = True,
+              use_absolute_paths: bool = False) -> None:
     """
     Opens the specified paths in an editor, sanity-checks the move operations,
     and applies the moves.

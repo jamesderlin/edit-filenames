@@ -66,8 +66,11 @@ class FakeFileTable:
                 self.existing_directories.add(path)
                 path = os.path.dirname(path)
 
-    def mkdir(self, path: typing.Union[str, os.PathLike],
-              mode=511, *, dir_fd=None) -> None:  # pylint: disable=unused-argument
+    def mkdir(self,
+              path: typing.Union[str, os.PathLike],
+              mode: int = 511,  # pylint: disable=unused-argument
+              *,
+              dir_fd: typing.Optional[int] = None) -> None:  # pylint: disable=unused-argument
         """Fake version of `os.mkdir`."""
         original_path = path
         path = os.path.abspath(path)
@@ -76,8 +79,11 @@ class FakeFileTable:
                           original_path)
         self.existing_directories.add(path)
 
-    def stat(self, path: typing.Union[str, os.PathLike], *,
-             dir_fd=None, follow_symlinks=True) -> os.stat_result:  # pylint: disable=unused-argument
+    def stat(self,
+             path: typing.Union[str, os.PathLike],
+             *,
+             dir_fd: typing.Optional[int] = None,  # pylint: disable=unused-argument
+             follow_symlinks: bool = True) -> os.stat_result:  # pylint: disable=unused-argument
         """Fake version of `os.stat`."""
         original_path = path
         path = os.path.abspath(path)
@@ -99,7 +105,10 @@ class FakeFileTable:
 
         return os.stat_result(tuple(result))
 
-    def lstat(self, path: os.PathLike, *, dir_fd=None) -> os.stat_result:
+    def lstat(self,
+              path: os.PathLike,
+              *,
+              dir_fd: typing.Optional[int] = None) -> os.stat_result:
         """Fake version of `os.lstat`."""
         return self.stat(path, dir_fd=dir_fd, follow_symlinks=False)
 
@@ -120,7 +129,7 @@ class TestContext:
 _original_print = print
 
 
-def fake_print(*args, **kwargs) -> None:
+def fake_print(*args: typing.Any, **kwargs: typing.Any) -> None:
     """
     Fake version of `print` that swallows output to `sys.stdout` and to
     `sys.stderr`.
@@ -149,7 +158,8 @@ def fake_move(test_ctx: TestContext) -> typing.Callable:
 
 def fake_edit_temporary(mock_contents: str) -> typing.Callable:
     """Returns a fake version of `spawneditor.edit_file`."""
-    def edit_temporary(*_args, **_kwargs) -> typing.Iterator[str]:
+    def edit_temporary(*_args: typing.Any,
+                       **_kwargs: typing.Any) -> typing.Iterator[str]:
         yield from mock_contents.splitlines(keepends=True)
     return edit_temporary
 
@@ -158,7 +168,7 @@ def expect_edit_move(test_case: unittest.TestCase,
                      original_filename_list: typing.List[str],
                      new_filenames: str,
                      expected_calls: typing.List,
-                     test_ctx: TestContext = None,
+                     test_ctx: typing.Optional[TestContext] = None,
                      raises: typing.Any = None) -> None:
     """
     Verifies the behavior of `edit_filenames.edit_move`, setting up necessary
@@ -333,7 +343,6 @@ class TestEditFilenames(unittest.TestCase):
                 unittest.mock.call.move("edit_filenames-0.tmp", "foo.1"),
             ])
 
-
     def test_edit_paths_interactive(self) -> None:
         """
         Tests the behavior of `edit_filenames.edit_paths` in interactive mode.
@@ -352,7 +361,7 @@ class TestEditFilenames(unittest.TestCase):
             ))
             line_number = mock_edit_temporary.call_args.kwargs["line_number"]
 
-            self.assertTrue(1 < line_number)
+            self.assertTrue(line_number > 1)
             self.assertTrue(line_number <= len(content_lines))
             for i in range(line_number) :
                 if "instructions" in content_lines[i].lower():
@@ -361,7 +370,6 @@ class TestEditFilenames(unittest.TestCase):
                 self.fail("No instructions found")
             self.assertEqual(content_lines[line_number - 1:], input_paths)
             self.assertEqual(edited_paths, ["foo", "bar", "qux"])
-
 
     def test_edit_paths_noninteractive(self) -> None:
         """
