@@ -66,19 +66,22 @@ class RestartEdit(Exception):
         self.paths_to_edit = paths_to_edit
 
 
-def prompt(message: str, choices: typing.Collection[str], *,
+def prompt(message: str,
+           choices: typing.Union[typing.Collection[str],
+                                 typing.Collection[typing.Sequence[str]]],
+           *,
            default: typing.Optional[str] = None) -> str:
     """
     Wrapper around `python_cli_utils.choices_prompt.choices_prompt`.
 
     Raises an `AbortError` if the user cancels the prompt by sending EOF.
     """
-    try:
-        return python_cli_utils.choices_prompt.choices_prompt(message=message,
-                                                              choices=choices,
-                                                              default=default)
-    except EOFError:
+    response = python_cli_utils.choices_prompt(message,
+                                               choices=choices,
+                                               default=default)
+    if response is None:
         raise AbortError(cancelled=True) from None
+    return response
 
 
 def extract_file_paths(lines: typing.List[str]) -> typing.List[str]:
@@ -243,7 +246,10 @@ def check_whitespace(ctx: EditMoveContext) -> None:
                           "e: Edit\n"
                           "q: Quit\n"
                           "? [s] ",
-                          ("strip", "preserve", "edit", "quit"),
+                          (("strip", "s"),
+                           ("preserve", "p"),
+                           ("edit", "e"),
+                           ("quit", "q")),
                           default="strip")
 
     if response == "strip":
@@ -281,7 +287,7 @@ def check_collisions(ctx: EditMoveContext) -> None:
             response = prompt("r: Restart (default)\n"
                               "q: Quit\n"
                               "? [r] ",
-                              ("restart", "quit"),
+                              (("restart", "r"), ("quit", "q")),
                               default="restart")
 
         if response == "restart":
@@ -307,7 +313,7 @@ def check_collisions(ctx: EditMoveContext) -> None:
             response = prompt("e: Edit (default)\n"
                               "q: Quit\n"
                               "? [e] ",
-                              ("edit", "quit"),
+                              (("edit", "e"), ("quit", "q")),
                               default="edit")
 
         if response == "edit":
@@ -336,7 +342,7 @@ def check_paths(ctx: EditMoveContext) -> None:
             response = prompt("r: Restart (default)\n"
                               "q: Quit\n"
                               "? [r] ",
-                              ("restart", "quit"),
+                              (("restart", "r"), ("quit", "q")),
                               default="restart")
 
         if response == "quit":
@@ -378,7 +384,7 @@ def preview_renames(ctx: EditMoveContext) -> None:
                       "e: Edit\n"
                       "q: Quit\n"
                       "? [p] ",
-                      ("proceed", "edit", "quit"),
+                      (("proceed", "p"), ("edit", "e"), ("quit", "q")),
                       default="proceed")
     if response == "quit":
         raise AbortError(cancelled=True)
@@ -484,7 +490,7 @@ def apply_moves(ctx: EditMoveContext) -> None:
         response = prompt("k: Keep successful changes (default)\n"
                           "u: Undo all changes\n"
                           "? [k] ",
-                          ("undo", "keep"),
+                          (("undo", "u"), ("keep", "k")),
                           default="keep")
 
     if response == "keep":
@@ -573,7 +579,7 @@ def edit_move(original_paths: typing.List[str], *,
             response = prompt("r: Replace non-printable characters (default)\n"
                               "q: Quit\n"
                               "? [r] ",
-                              ("replace", "quit"),
+                              (("replace", "r"), ("quit", "q")),
                               default="replace")
 
         if response == "quit":
@@ -619,8 +625,8 @@ Options:
         Disables all confirmation prompts and disables showing instructions in
         the editor.  Useful for automated editing.
 
-        In non-interactive mode, any failure will automatically undo any changes
-        and abort.
+        In non-interactive mode, any failure will automatically undo any
+        changes and abort.
 """
 
 
