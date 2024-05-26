@@ -2,7 +2,7 @@
 
 # edit-filenames
 #
-# Copyright (C) 2020-2021 James D. Lin <jamesdlin@berkeley.edu>
+# Copyright (C) 2020-2024 James D. Lin <jamesdlin@berkeley.edu>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -416,8 +416,8 @@ def apply_moves(ctx: EditMoveContext) -> None:
     any failures.
     """
     # Reorder the renames to try to minimize file system access.  If we have
-    # chains of renames (e.g. A => B, B => C, C => D), we'll want to perform the
-    # C => D rename first to unblock the rest.
+    # chains of renames (e.g. A => B, B => C, C => D), we'll want to perform
+    # the C => D rename first to unblock the rest.
     #
     # Use an `OrderedDict` to preserve the original order as much as possible.
     source_destination_dict \
@@ -428,7 +428,8 @@ def apply_moves(ctx: EditMoveContext) -> None:
     while source_destination_dict:
         # To preserve the original order as much as possible, keep track of
         # current chain of renames instead of appending directly the deque.
-        rename_chain: typing.List[typing.Tuple[pathlib.Path, pathlib.Path]] = []
+        rename_chain: typing.List[typing.Tuple[pathlib.Path, pathlib.Path]] \
+            = []
         (source_path, destination_path) \
             = source_destination_dict.popitem(last=False)
         rename_chain.append((source_path, destination_path))
@@ -512,7 +513,8 @@ def apply_moves(ctx: EditMoveContext) -> None:
 def edit_move(original_paths: typing.List[str], *,
               editor: typing.Optional[str] = None,
               interactive: bool = True,
-              use_absolute_paths: bool = False) -> None:
+              use_absolute_paths: bool = False,
+              sort: bool = True) -> None:
     """
     Opens the specified paths in an editor, sanity-checks the move operations,
     and applies the moves.
@@ -541,8 +543,12 @@ def edit_move(original_paths: typing.List[str], *,
     else:
         original_paths = [os.path.normpath(path) for path in original_paths]
 
-    original_paths = list(set(original_paths))
-    original_paths.sort()
+    # Remove duplicates.
+    original_paths \
+        = list(collections.OrderedDict(((path, None)
+                                        for path in original_paths)))
+    if sort:
+        original_paths.sort()
 
     # Verify that all paths exist.
     directories_to_move: typing.List[pathlib.Path] = []
@@ -621,6 +627,10 @@ Options:
     --absolute
         Use absolute file paths.
 
+    --preserve-order
+        Do not sort the input paths.  Paths instead will be in the same order
+        as passed on the command-line.
+
     --non-interactive
         Disables all confirmation prompts and disables showing instructions in
         the editor.  Useful for automated editing.
@@ -652,6 +662,7 @@ def main(argv: typing.List[str]) -> int:
                                      ["help",
                                       "editor=",
                                       "absolute",
+                                      "preserve-order",
                                       "interactive",
                                       "non-interactive"])
     except getopt.GetoptError as e:
@@ -662,6 +673,7 @@ def main(argv: typing.List[str]) -> int:
     editor: typing.Optional[str] = None
     interactive = True
     use_absolute_paths = False
+    sort = True
 
     for (o, a) in opts:
         if o in ("-h", "--help"):
@@ -671,6 +683,8 @@ def main(argv: typing.List[str]) -> int:
             editor = a
         elif o == "--absolute":
             use_absolute_paths = True
+        elif o == "--preserve-order":
+            sort = False
         elif o == "--interactive":
             interactive = True
         elif o == "--non-interactive":
@@ -690,7 +704,9 @@ def main(argv: typing.List[str]) -> int:
     new_stdin: typing.Optional[typing.TextIO] = None
     if interactive:
         try:
-            # pylint: disable=import-error,unused-import,import-outside-toplevel
+            # pylint: disable=import-error
+            # pylint: disable=unused-import
+            # pylint: disable=import-outside-toplevel
             # Imported for side-effect.
             import readline  # noqa: F401
         except ModuleNotFoundError:
@@ -705,7 +721,8 @@ def main(argv: typing.List[str]) -> int:
         edit_move(args,
                   editor=editor,
                   interactive=interactive,
-                  use_absolute_paths=use_absolute_paths)
+                  use_absolute_paths=use_absolute_paths,
+                  sort=sort)
     finally:
         sys.stdin = old_stdin
         if new_stdin:
